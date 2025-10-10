@@ -1,5 +1,7 @@
 # BenSAF
 
+![BenSAF logo](BenSAF.png)
+
 A toolkit for health-based assessments of sustainable aviation fuels.
 
 ## Overview
