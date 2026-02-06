@@ -538,9 +538,6 @@ class AnalysisData:
                      - idw_max_distance: Max distance for IDW (default: None)
                      - idw_num_neighbors: Number of neighbors for IDW (default: None)
                      - receptor_match_tolerance: Tolerance for matching receptors (default: 1.0)
-                     - airport_location: Optional tuple (lon, lat) of airport coordinates in WGS84
-                     - airport_threshold_distance: Distance threshold in meters for airport proximity (default: 3000)
-                     - airport_source_multiplier: Multiplier for max receptor value near airport (default: 1.15)
         """
         if self.tract_geometries is None:
             raise ValueError("Tract geometries must be loaded first")
