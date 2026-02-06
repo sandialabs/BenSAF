@@ -301,10 +301,7 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
                        method: str = 'spatial_join',
                        idw_power: int = 2,
                        idw_max_distance: Optional[float] = None,
-                       idw_num_neighbors: Optional[int] = None,
-                       airport_location: Optional[Tuple[float, float]] = None,
-                       airport_threshold_distance: float = 3000.0,
-                       airport_source_multiplier: float = 1.15) -> pd.DataFrame:
+                       idw_num_neighbors: Optional[int] = None) -> pd.DataFrame:
     """
     Aggregate receptor point values to census tracts.
     
@@ -316,12 +313,6 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
     For method='idw_interpolation':
         - Uses pure IDW interpolation to all tract centroids
     
-    Hybrid approach for tracts near airport:
-        - If airport_location is provided, tracts within airport_threshold_distance
-          use max(nearby_receptors) * airport_source_multiplier to account for
-          source proximity (airport is emission source, so concentrations should
-          be higher than nearby receptors)
-    
     Args:
         receptor_gdf: GeoDataFrame with receptor points and values
         value_column: Name of column containing values to aggregate
@@ -330,9 +321,6 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
         idw_power: Power parameter for IDW (if used)
         idw_max_distance: Maximum distance for IDW (if used)
         idw_num_neighbors: Number of neighbors for IDW (if used)
-        airport_location: Optional tuple (lon, lat) of airport coordinates in WGS84
-        airport_threshold_distance: Distance threshold in meters for airport proximity (default: 3000)
-        airport_source_multiplier: Multiplier for max receptor value near airport (default: 1.15)
         
     Returns:
         DataFrame with GEOID and aggregated values
@@ -341,34 +329,11 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
     if receptor_gdf.crs != tracts_gdf.crs:
         tracts_gdf = tracts_gdf.to_crs(receptor_gdf.crs)
     
-    # Transform airport location to receptor CRS if provided
-    airport_point = None
-    if airport_location is not None:
-        airport_lon, airport_lat = airport_location
-        airport_gdf = gpd.GeoDataFrame(
-            [1],
-            geometry=gpd.points_from_xy([airport_lon], [airport_lat]),
-            crs='EPSG:4326'
-        )
-        airport_gdf = airport_gdf.to_crs(receptor_gdf.crs)
-        airport_point = airport_gdf.geometry.iloc[0]
-        logger.info(f"Airport location transformed to {receptor_gdf.crs}: ({airport_point.x:.2f}, {airport_point.y:.2f})")
-    
     # Start with all tracts
     if 'GEOID' in tracts_gdf.columns:
         all_tracts = tracts_gdf[['GEOID', 'geometry']].copy()
     else:
         all_tracts = tracts_gdf.reset_index()[['GEOID', 'geometry']].copy()
-    
-    # Identify tracts near airport if airport location provided
-    tracts_near_airport = None
-    if airport_point is not None:
-        tract_centroids = all_tracts.geometry.centroid
-        distances_to_airport = tract_centroids.distance(airport_point)
-        near_airport_mask = distances_to_airport <= airport_threshold_distance
-        tracts_near_airport = all_tracts[near_airport_mask].copy()
-        if len(tracts_near_airport) > 0:
-            logger.info(f"Found {len(tracts_near_airport)} tracts within {airport_threshold_distance}m of airport")
     
     if method == 'spatial_join':
         # Step 1: Spatial join for tracts with direct intersections
@@ -381,45 +346,6 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
         
         # Group by GEOID and average values
         tracts_with_data = points_in_tracts.groupby('GEOID')[value_column].mean().reset_index()
-        
-        # Step 1.5: Apply hybrid approach to tracts with data that are near airport
-        if tracts_near_airport is not None and len(tracts_near_airport) > 0:
-            receptor_coords = np.array([[g.x, g.y] for g in receptor_gdf.geometry])
-            receptor_values = receptor_gdf[value_column].values
-            tree = cKDTree(receptor_coords)
-            
-            near_airport_geoids = set(tracts_near_airport['GEOID'].values)
-            tracts_with_data_near_airport = tracts_with_data[tracts_with_data['GEOID'].isin(near_airport_geoids)].copy()
-            
-            if len(tracts_with_data_near_airport) > 0:
-                # For tracts near airport with data, ensure they get at least max(nearby_receptors) * multiplier
-                for idx, row in tracts_with_data_near_airport.iterrows():
-                    geoid = row['GEOID']
-                    current_value = row[value_column]
-                    
-                    # Find tract centroid
-                    tract_geom = all_tracts[all_tracts['GEOID'] == geoid].geometry.iloc[0]
-                    tract_centroid = tract_geom.centroid
-                    tract_coord = np.array([[tract_centroid.x, tract_centroid.y]])
-                    
-                    # Find nearby receptors within search distance
-                    search_distance = min(5000.0, airport_threshold_distance * 2)
-                    distances, indices = tree.query(tract_coord, k=min(10, len(receptor_coords)))
-                    
-                    if distances.ndim == 1:
-                        distances = distances.reshape(-1, 1)
-                        indices = indices.reshape(-1, 1)
-                    
-                    within_distance = distances[0] <= search_distance
-                    if within_distance.any():
-                        nearby_values = receptor_values[indices[0][within_distance]]
-                        max_value = np.max(nearby_values)
-                        min_expected_value = max_value * airport_source_multiplier
-                        
-                        # Use the higher of current value or min expected value
-                        if current_value < min_expected_value:
-                            tracts_with_data.loc[tracts_with_data['GEOID'] == geoid, value_column] = min_expected_value
-                            logger.debug(f"Tract {geoid} near airport: adjusted from {current_value:.2f} to {min_expected_value:.2f}")
         
         # Step 2: Identify tracts without data
         tracts_without_data = all_tracts[~all_tracts['GEOID'].isin(tracts_with_data['GEOID'])]
@@ -442,45 +368,6 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
                 max_distance=idw_max_distance,
                 num_neighbors=idw_num_neighbors
             )
-            
-            # Step 3.5: Apply hybrid approach for tracts near airport
-            if tracts_near_airport is not None and len(tracts_near_airport) > 0:
-                # Find tracts near airport that are in tracts_without_data
-                near_airport_geoids = set(tracts_near_airport['GEOID'].values)
-                near_airport_indices = []
-                for idx, geoid in enumerate(tracts_without_data['GEOID'].values):
-                    if geoid in near_airport_geoids:
-                        near_airport_indices.append(idx)
-                
-                if len(near_airport_indices) > 0:
-                    # For tracts near airport, use max of nearby receptors with multiplier
-                    tree = cKDTree(receptor_coords)
-                    near_airport_coords = target_coords[near_airport_indices]
-                    
-                    # Find nearest neighbors within reasonable distance (e.g., 5km)
-                    search_distance = min(5000.0, airport_threshold_distance * 2)
-                    distances, indices = tree.query(near_airport_coords, k=min(10, len(receptor_coords)))
-                    
-                    # Handle case where only one neighbor
-                    if distances.ndim == 1:
-                        distances = distances.reshape(-1, 1)
-                        indices = indices.reshape(-1, 1)
-                    
-                    # For each tract near airport, find max value within search distance
-                    for i, tract_idx in enumerate(near_airport_indices):
-                        neighbor_distances = distances[i]
-                        neighbor_indices = indices[i]
-                        
-                        # Filter by search distance
-                        within_distance = neighbor_distances <= search_distance
-                        if within_distance.any():
-                            nearby_values = receptor_values[neighbor_indices[within_distance]]
-                            max_value = np.max(nearby_values)
-                            # Apply multiplier to account for source proximity
-                            interpolated_values[tract_idx] = max_value * airport_source_multiplier
-                            logger.debug(f"Tract {tracts_without_data.iloc[tract_idx]['GEOID']}: "
-                                      f"using max nearby value {max_value:.2f} * {airport_source_multiplier} = "
-                                      f"{interpolated_values[tract_idx]:.2f}")
             
             # Step 4: For any remaining NaN values (very isolated tracts), use nearest neighbor
             nan_mask = np.isnan(interpolated_values)
@@ -520,47 +407,6 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
             max_distance=idw_max_distance,
             num_neighbors=idw_num_neighbors
         )
-        
-        # Apply hybrid approach for tracts near airport
-        if tracts_near_airport is not None and len(tracts_near_airport) > 0:
-            # Find indices of tracts near airport
-            if 'GEOID' in tracts_gdf.columns:
-                all_geoids = tracts_gdf['GEOID'].values
-            else:
-                all_geoids = tracts_gdf.reset_index()['GEOID'].values
-            
-            near_airport_geoids = set(tracts_near_airport['GEOID'].values)
-            near_airport_indices = [i for i, geoid in enumerate(all_geoids) if geoid in near_airport_geoids]
-            
-            if len(near_airport_indices) > 0:
-                # For tracts near airport, use max of nearby receptors with multiplier
-                tree = cKDTree(receptor_coords)
-                near_airport_coords = target_coords[near_airport_indices]
-                
-                # Find nearest neighbors within reasonable distance (e.g., 5km)
-                search_distance = min(5000.0, airport_threshold_distance * 2)
-                distances, indices = tree.query(near_airport_coords, k=min(10, len(receptor_coords)))
-                
-                # Handle case where only one neighbor
-                if distances.ndim == 1:
-                    distances = distances.reshape(-1, 1)
-                    indices = indices.reshape(-1, 1)
-                
-                # For each tract near airport, find max value within search distance
-                for i, tract_idx in enumerate(near_airport_indices):
-                    neighbor_distances = distances[i]
-                    neighbor_indices = indices[i]
-                    
-                    # Filter by search distance
-                    within_distance = neighbor_distances <= search_distance
-                    if within_distance.any():
-                        nearby_values = receptor_values[neighbor_indices[within_distance]]
-                        max_value = np.max(nearby_values)
-                        # Apply multiplier to account for source proximity
-                        interpolated_values[tract_idx] = max_value * airport_source_multiplier
-                        logger.debug(f"Tract {all_geoids[tract_idx]}: "
-                                  f"using max nearby value {max_value:.2f} * {airport_source_multiplier} = "
-                                  f"{interpolated_values[tract_idx]:.2f}")
         
         # Fallback to nearest neighbor for any NaN values
         nan_mask = np.isnan(interpolated_values)
@@ -620,10 +466,7 @@ def generate_exposure_from_aermod(
         idw_max_distance: Maximum distance for IDW interpolation (None = no limit)
         idw_num_neighbors: Number of neighbors for IDW interpolation (None = use all)
         receptor_match_tolerance: Tolerance for matching receptors (meters)
-        **aggregation_kwargs: Additional parameters passed to aggregate_to_tracts:
-                            - airport_location: Optional tuple (lon, lat) of airport coordinates in WGS84
-                            - airport_threshold_distance: Distance threshold in meters (default: 3000)
-                            - airport_source_multiplier: Multiplier for max receptor value near airport (default: 1.15)
+        **aggregation_kwargs: Additional parameters passed to aggregate_to_tracts
         
     Returns:
         DataFrame with GEOID and baseline_pollutant_concentration columns
