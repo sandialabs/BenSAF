@@ -104,17 +104,11 @@ def register_callbacks(app):
                 (takeoff_westflow_file, 2/3)
             ]
             
-            # Airport coordinates (O'Hare International Airport, Chicago)
-            airport_location = (-87.90472, 41.97861)  # (longitude, latitude) in WGS84
-            
             workflow_instance.data.load_baseline_exposure_from_aermod_workflow(
                 landing_files=landing_files,
                 takeoff_files=takeoff_files,
                 calibration_file=calibration_file,
-                aggregation_method='spatial_join',
-                airport_location=airport_location,
-                airport_threshold_distance=3000.0,
-                airport_source_multiplier=1.15
+                aggregation_method='spatial_join'
             )
             
             # Load mortality data
