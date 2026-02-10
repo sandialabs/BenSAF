@@ -33,6 +33,8 @@ def create_layout():
         
         dcc.Store(id='workflow-state', data={}),
         dcc.Store(id='analysis-results', data={}),
+        dcc.Store(id='case-studies-init', data={'init': True}),
+        dcc.Store(id='data-config', data={'crs': 'EPSG:4326', 'aermod_crs': 'EPSG:32616', 'airport_coordinates': None}),
         
     ], fluid=True, className="py-4")
 
@@ -102,12 +104,72 @@ def create_data_tab():
         dbc.Row([
             dbc.Col([
                 html.H3("Data Upload", className="mt-4 mb-3"),
-                html.P("Upload your data files or load the ORD example dataset.", className="text-muted"),
+                html.P("Configure your study area and upload data files or load example datasets.", className="text-muted"),
             ])
         ]),
         
         dbc.Row([
             dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader(html.H5("Study Area Configuration", className="mb-0")),
+                    dbc.CardBody([
+                        dbc.Row([
+                            dbc.Col([
+                                html.Label("Airport Coordinates", className="fw-bold"),
+                                html.Small("Optional: Latitude and longitude of the airport center", className="text-muted d-block mb-2"),
+                                dbc.Row([
+                                    dbc.Col([
+                                        dbc.Input(
+                                            id='input-airport-lat',
+                                            type='number',
+                                            placeholder='Latitude (e.g., 41.9786)',
+                                            step=0.0001,
+                                            className="mb-2"
+                                        ),
+                                    ], md=6),
+                                    dbc.Col([
+                                        dbc.Input(
+                                            id='input-airport-lon',
+                                            type='number',
+                                            placeholder='Longitude (e.g., -87.9048)',
+                                            step=0.0001,
+                                            className="mb-2"
+                                        ),
+                                    ], md=6),
+                                ]),
+                            ], md=4),
+                            dbc.Col([
+                                html.Label("Coordinate Reference System (CRS)", className="fw-bold"),
+                                html.Small("CRS for input data (e.g., EPSG:4326 for WGS84)", className="text-muted d-block mb-2"),
+                                dbc.Input(
+                                    id='input-crs',
+                                    type='text',
+                                    placeholder='EPSG:4326',
+                                    value='EPSG:4326',
+                                    className="mb-2"
+                                ),
+                            ], md=4),
+                            dbc.Col([
+                                html.Label("AERMOD CRS", className="fw-bold"),
+                                html.Small("CRS for AERMOD files (e.g., EPSG:32616 for UTM Zone 16N)", className="text-muted d-block mb-2"),
+                                dbc.Input(
+                                    id='input-aermod-crs',
+                                    type='text',
+                                    placeholder='EPSG:32616',
+                                    value='EPSG:32616',
+                                    className="mb-2"
+                                ),
+                            ], md=4),
+                        ]),
+                        html.Div(id='config-data-status', className="mt-2", style={"fontSize": "12px"}),
+                    ])
+                ], className="mb-4"),
+            ], md=12)
+        ]),
+        
+        dbc.Row([
+            dbc.Col([
+                html.H4("Data Upload", className="mb-3"),
                 dbc.Accordion([
                     dbc.AccordionItem([
                         html.Label("Census Tract Geometries (GeoJSON, Shapefile, or GeoPackage)", className="fw-bold"),
@@ -276,15 +338,76 @@ def create_data_tab():
                             html.Div(id='generate-exposure-status', className="mt-2"),
                         ]),
                     ], title="3. Exposure Data", item_id="item-exposure"),
-                    
-                    dbc.AccordionItem([
-                        html.Label("Mortality Data (CSV)", className="fw-bold"),
+                ], start_collapsed=False),
+            ], md=6),
+            
+            dbc.Col([
+                html.H4("Load Example Data", className="mb-3"),
+                dbc.Card([
+                    dbc.CardBody([
+                        html.P("Select a case study to load example data", className="text-muted mb-3"),
+                        dcc.Dropdown(
+                            id='case-study-dropdown',
+                            options=[],
+                            value=None,
+                            clearable=False,
+                            placeholder="Select a case study...",
+                            className="mb-3"
+                        ),
+                        dbc.Button(
+                            "Load Selected Case Study",
+                            id='btn-load-example',
+                            color="secondary",
+                            size="lg",
+                            className="w-100",
+                            disabled=True
+                        ),
+                        html.Div(id='example-load-status', className="mt-3")
+                    ])
+                ]),
+            ], md=6),
+        ]),
+        
+        html.Hr(className="my-4"),
+        
+        dbc.Row([
+            dbc.Col([
+                html.H4("Health Pipelines", className="mt-4 mb-3"),
+                html.P("Select and configure health benefit pipelines. Each pipeline has specific data requirements.", className="text-muted mb-3"),
+            ], md=12)
+        ]),
+        
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader([
+                        html.Div([
+                            html.H5("Mortality Pipeline", className="mb-0 d-inline"),
+                            html.Span(id='mortality-pipeline-status', className="ms-2")
+                        ])
+                    ]),
+                    dbc.CardBody([
+                        html.P("Computes mortality health impacts and economic benefits from pollutant reduction.", className="text-muted mb-3"),
+                        
+                        html.H6("Required Data", className="fw-bold mt-3 mb-2"),
+                        html.Ul([
+                            html.Li("Incidence data with 'mortality_rate' column (CSV)"),
+                            html.Li("Demographics data with 'population' column (already uploaded)"),
+                        ], className="mb-3"),
+                        
+                        html.H6("Configuration", className="fw-bold mt-3 mb-2"),
+                        html.Ul([
+                            html.Li("Mortality function: Selected in Configuration tab"),
+                            html.Li("Economic parameters: Configured in data/economic_parameters.json"),
+                        ], className="mb-3"),
+                        
+                        html.Label("Upload Incidence Data (CSV)", className="fw-bold"),
                         html.Small("Must contain GEOID and mortality_rate columns", className="text-muted d-block mb-2"),
                         dcc.Upload(
-                            id='upload-mortality',
+                            id='upload-mortality-incidence',
                             children=html.Div([
                                 'Drag and Drop or ',
-                                html.A('Select Mortality Data File')
+                                html.A('Select Incidence Data File')
                             ]),
                             style={
                                 'width': '100%',
@@ -298,80 +421,110 @@ def create_data_tab():
                             },
                             multiple=False
                         ),
-                        html.Div(id='upload-mortality-status', className="text-muted mt-2"),
-                    ], title="4. Mortality Data", item_id="item-mortality"),
-                ], start_collapsed=False, className="mb-4"),
-                
-                html.Hr(className="my-4"),
-                
-                dbc.Card([
-                    dbc.CardBody([
-                        html.H5("Load Example Data", className="text-center mb-3"),
-                        html.P("Quick start with the ORD case study dataset", className="text-center text-muted mb-3"),
-                        dbc.Button(
-                            "Load ORD Example Data",
-                            id='btn-load-example',
-                            color="secondary",
-                            size="lg",
-                            className="w-100"
-                        ),
-                        html.Div(id='example-load-status', className="mt-3")
+                        html.Div(id='upload-mortality-incidence-status', className="text-muted mt-2"),
                     ])
-                ]),
-                
-                html.Hr(className="my-4"),
-                
-                dbc.Row([
-                    dbc.Col([
-                        html.H4("Data Explorer", className="mt-4 mb-3"),
-                        html.Label("Select Variable to Display", className="fw-bold"),
-                        dcc.Dropdown(
-                            id='data-viewer-dropdown',
-                            options=[],
-                            value=None,
-                            clearable=False,
-                            placeholder="Select a variable...",
-                            className="mb-3"
+                ], className="mb-3"),
+            ], md=6),
+            
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader([
+                        html.Div([
+                            html.H5("Preterm Birth Pipeline", className="mb-0 d-inline"),
+                            html.Span(id='preterm-birth-pipeline-status', className="ms-2")
+                        ])
+                    ]),
+                    dbc.CardBody([
+                        html.P("Computes reduction in preterm births and economic benefits from UFP reduction.", className="text-muted mb-3"),
+                        
+                        html.H6("Required Data", className="fw-bold mt-3 mb-2"),
+                        html.Ul([
+                            html.Li("Preterm birth data with 'baseline_preterm_births' column (CSV)"),
+                            html.Li("Demographics data with 'population' column (already uploaded)"),
+                        ], className="mb-3"),
+                        
+                        html.H6("Configuration", className="fw-bold mt-3 mb-2"),
+                        html.Ul([
+                            html.Li("Odds ratio: Configured in data/economic_parameters.json"),
+                            html.Li("Monetary value per PtB: Configured in data/economic_parameters.json"),
+                        ], className="mb-3"),
+                        
+                        html.Label("Upload Preterm Birth Data (CSV)", className="fw-bold"),
+                        html.Small("Must contain GEOID and baseline_preterm_births columns", className="text-muted d-block mb-2"),
+                        dcc.Upload(
+                            id='upload-ptb-data',
+                            children=html.Div([
+                                'Drag and Drop or ',
+                                html.A('Select Preterm Birth Data File')
+                            ]),
+                            style={
+                                'width': '100%',
+                                'height': '60px',
+                                'lineHeight': '60px',
+                                'borderWidth': '1px',
+                                'borderStyle': 'dashed',
+                                'borderRadius': '5px',
+                                'textAlign': 'center',
+                                'margin': '10px 0'
+                            },
+                            multiple=False
                         ),
-                    ], md=12)
-                ]),
-                
-                dbc.Row([
-                    dbc.Col([
-                        dcc.Loading(
-                            id="loading-data-viewer-map",
-                            type="circle",
-                            children=[
-                                dcc.Graph(
-                                    id='data-viewer-map',
-                                    config={'displayModeBar': True, 'scrollZoom': True},
-                                    style={'height': '600px'}
-                                )
-                            ]
-                        ),
-                    ], md=7),
-                    
-                    dbc.Col([
-                        html.H5("Data Table", className="mb-2 mt-3"),
-                        html.P("First 100 records", className="text-muted small mb-2"),
-                        dcc.Loading(
-                            id="loading-data-table",
-                            type="circle",
-                            children=[
-                                html.Div(
-                                    id='data-viewer-table',
-                                    style={
-                                        'height': '580px',
-                                        'overflowY': 'auto',
-                                        'overflowX': 'auto'
-                                    }
-                                )
-                            ]
-                        ),
-                    ], md=5)
-                ]),
-                
+                        html.Div(id='upload-ptb-status', className="text-muted mt-2"),
+                    ])
+                ], className="mb-3"),
+            ], md=6),
+        ]),
+        
+        html.Hr(className="my-4"),
+        
+        dbc.Row([
+            dbc.Col([
+                html.H4("Data Explorer", className="mt-4 mb-3"),
+                html.Label("Select Variable to Display", className="fw-bold"),
+                dcc.Dropdown(
+                    id='data-viewer-dropdown',
+                    options=[],
+                    value=None,
+                    clearable=False,
+                    placeholder="Select a variable...",
+                    className="mb-3"
+                ),
             ], md=12)
+        ]),
+        
+        dbc.Row([
+            dbc.Col([
+                dcc.Loading(
+                    id="loading-data-viewer-map",
+                    type="circle",
+                    children=[
+                        dcc.Graph(
+                            id='data-viewer-map',
+                            config={'displayModeBar': True, 'scrollZoom': True},
+                            style={'height': '600px'}
+                        )
+                    ]
+                ),
+            ], md=7),
+            
+            dbc.Col([
+                html.H5("Data Table", className="mb-2 mt-3"),
+                html.P("First 100 records", className="text-muted small mb-2"),
+                dcc.Loading(
+                    id="loading-data-table",
+                    type="circle",
+                    children=[
+                        html.Div(
+                            id='data-viewer-table',
+                            style={
+                                'height': '580px',
+                                'overflowY': 'auto',
+                                'overflowX': 'auto'
+                            }
+                        )
+                    ]
+                ),
+            ], md=5)
         ]),
         
     ], fluid=True, className="py-4")
@@ -400,7 +553,7 @@ def create_configuration_tab():
                     dbc.CardBody([
                         dbc.Row([
                             dbc.Col([
-                                html.Label("Select Mortality Function", className="fw-bold"),
+                                html.Label("Select Mortality Function to View", className="fw-bold"),
                                 dcc.Dropdown(
                                     id='mortality-function-dropdown',
                                     options=[],
@@ -411,53 +564,12 @@ def create_configuration_tab():
                             ], md=12),
                         ]),
                         
-                        dbc.Row([
-                            dbc.Col([
-                                html.Label("Mean Relative Risk", className="fw-bold"),
-                                dbc.Input(
-                                    id='input-mean-rr',
-                                    type='number',
-                                    value=1.012,
-                                    step=0.001,
-                                    className="mb-3"
-                                ),
-                                html.Small("Mean relative risk per unit increase", className="text-muted"),
-                            ], md=6),
-                            dbc.Col([
-                                html.Label("Unit Increase (pt/cm³)", className="fw-bold"),
-                                dbc.Input(
-                                    id='input-unit-increase',
-                                    type='number',
-                                    value=2723,
-                                    step=1,
-                                    className="mb-3"
-                                ),
-                                html.Small("Pollutant concentration unit increase", className="text-muted"),
-                            ], md=6),
-                        ]),
+                        html.Div(id='mortality-function-details', className="mb-3"),
                         
-                        dbc.Row([
-                            dbc.Col([
-                                html.Label("Lower 95% CI", className="fw-bold"),
-                                dbc.Input(
-                                    id='input-lower-rr',
-                                    type='number',
-                                    value=1.010,
-                                    step=0.001,
-                                    className="mb-3"
-                                ),
-                            ], md=6),
-                            dbc.Col([
-                                html.Label("Upper 95% CI", className="fw-bold"),
-                                dbc.Input(
-                                    id='input-upper-rr',
-                                    type='number',
-                                    value=1.015,
-                                    step=0.001,
-                                    className="mb-3"
-                                ),
-                            ], md=6)
-                        ]),
+                        html.Hr(className="my-3"),
+                        
+                        html.Label("Select Functions to Compute in Analysis", className="fw-bold mb-2"),
+                        html.Div(id='mortality-function-checkboxes', className="mb-3"),
                         
                         html.Div(id='config-status', className="mt-3")
                     ])
@@ -468,86 +580,46 @@ def create_configuration_tab():
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader(html.H5("SAF to Pollutant Reduction", className="mb-0")),
+                    dbc.CardHeader(html.H5("SAF Blend Scenarios", className="mb-0")),
                     dbc.CardBody([
-                        html.P("Polynomial coefficients: Reduction = a₀ + a₁·SAF + a₂·SAF²", className="text-muted small mb-3"),
-                        dbc.Row([
-                            dbc.Col([
-                                html.Label("a₀ (constant)", className="fw-bold"),
-                                dbc.Input(
-                                    id='poly-coeff-0',
-                                    type='number',
-                                    value=0.0,
-                                    step=0.01,
-                                    className="mb-3"
-                                ),
-                            ], md=4),
-                            dbc.Col([
-                                html.Label("a₁ (linear)", className="fw-bold"),
-                                dbc.Input(
-                                    id='poly-coeff-1',
-                                    type='number',
-                                    value=1.0,
-                                    step=0.01,
-                                    className="mb-3"
-                                ),
-                            ], md=4),
-                            dbc.Col([
-                                html.Label("a₂ (quadratic)", className="fw-bold"),
-                                dbc.Input(
-                                    id='poly-coeff-2',
-                                    type='number',
-                                    value=0.0,
-                                    step=0.001,
-                                    className="mb-3"
-                                ),
-                            ], md=4),
-                        ]),
+                        html.P("Define the SAF blend percentages to analyze (0-50%)", className="text-muted small mb-3"),
+                        html.Div(id='saf-scenarios-list', className="mb-3"),
+                        dbc.Button(
+                            "Add Scenario",
+                            id='btn-add-scenario',
+                            color="secondary",
+                            size="sm",
+                            className="mb-2"
+                        ),
+                        html.Div(id='saf-scenarios-status', className="mt-2")
                     ])
                 ], className="mb-4"),
                 
                 dbc.Card([
-                    dbc.CardHeader(html.H5("SAF Blend Scenarios", className="mb-0")),
+                    dbc.CardHeader(html.H5("Preterm Birth Data (Optional)", className="mb-0")),
                     dbc.CardBody([
-                        html.P("Define the SAF blend percentages to analyze", className="text-muted small mb-3"),
-                        dbc.Row([
-                            dbc.Col([
-                                html.Label("Scenario 1 (%)", className="fw-bold"),
-                                dbc.Input(
-                                    id='scenario-1',
-                                    type='number',
-                                    value=25,
-                                    min=0,
-                                    max=100,
-                                    step=1,
-                                    className="mb-3"
-                                ),
-                            ], md=4),
-                            dbc.Col([
-                                html.Label("Scenario 2 (%)", className="fw-bold"),
-                                dbc.Input(
-                                    id='scenario-2',
-                                    type='number',
-                                    value=50,
-                                    min=0,
-                                    max=100,
-                                    step=1,
-                                    className="mb-3"
-                                ),
-                            ], md=4),
-                            dbc.Col([
-                                html.Label("Scenario 3 (%)", className="fw-bold"),
-                                dbc.Input(
-                                    id='scenario-3',
-                                    type='number',
-                                    value=75,
-                                    min=0,
-                                    max=100,
-                                    step=1,
-                                    className="mb-3"
-                                ),
-                            ], md=4),
-                        ]),
+                        html.P("Upload preterm birth data to enable preterm birth benefit calculations. Economic parameters are configured in data/economic_parameters.json", className="text-muted small mb-3"),
+                        html.Label("Upload Preterm Birth Data", className="fw-bold"),
+                        dcc.Upload(
+                            id='upload-ptb-data',
+                            children=html.Div([
+                                'Drag and Drop or ',
+                                html.A('Select PtB Data File')
+                            ]),
+                            style={
+                                'width': '100%',
+                                'height': '40px',
+                                'lineHeight': '40px',
+                                'borderWidth': '1px',
+                                'borderStyle': 'dashed',
+                                'borderRadius': '5px',
+                                'textAlign': 'center',
+                                'margin': '10px 0',
+                                'fontSize': '12px'
+                            },
+                            multiple=False
+                        ),
+                        html.Div(id='upload-ptb-status', className="text-muted mt-1", style={"fontSize": "11px"}),
                     ])
                 ]),
             ], md=6),
@@ -559,6 +631,9 @@ def create_configuration_tab():
                 ),
             ], md=6)
         ]),
+        
+        dcc.Store(id='saf-scenarios-store', data=[25, 50]),
+        dcc.Store(id='selected-mortality-functions-store', data=[])
         
     ], fluid=True, className="py-4")
 

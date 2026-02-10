@@ -2,16 +2,81 @@ import logging
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-from typing import Union, Tuple, Optional, List, Dict
+from typing import Union, Tuple, Optional, List, Dict, Any
 from pathlib import Path
 import matplotlib.pyplot as plt
 import urllib.request
 import zipfile
 import tempfile
 import ssl
+import json
 from shapely.geometry import box
 
 logger = logging.getLogger(__name__)
+
+
+def load_saf_blend_parameters() -> List[float]:
+    """
+    Load SAF blend polynomial coefficients from JSON file.
+    
+    Returns:
+        List of polynomial coefficients [a0, a1, a2, ...] for the formula:
+        reduction = a0 + a1·SAF + a2·SAF² + ...
+        where reduction is a negative percentage (0 to -100)
+    """
+    project_root = Path(__file__).parent.parent.parent
+    saf_params_file = project_root / 'data' / 'saf_blend_parameters.json'
+    
+    if not saf_params_file.exists():
+        logger.warning(f"SAF blend parameters file not found at {saf_params_file}, using default coefficients")
+        return [0.0, -0.0152, 0.00009]
+    
+    try:
+        with open(saf_params_file, 'r') as f:
+            data = json.load(f)
+        
+        coeffs = data.get('polynomial_coefficients', [0.0, -0.0152, 0.00009])
+        logger.info(f"Loaded SAF blend parameters: {coeffs}")
+        return coeffs
+    except Exception as e:
+        logger.error(f"Error loading SAF blend parameters: {e}, using default coefficients")
+        return [0.0, -0.0152, 0.00009]
+
+
+
+
+def load_economic_parameters() -> Dict[str, Any]:
+    """
+    Load economic parameters from JSON file.
+    
+    Returns:
+        Dictionary with keys: per_capita_consumption, life_years_gained,
+        preterm_birth_odds_ratio, monetary_value_per_ptb
+    """
+    project_root = Path(__file__).parent.parent.parent
+    econ_params_file = project_root / 'data' / 'economic_parameters.json'
+    
+    default_params = {
+        'per_capita_consumption': None,
+        'life_years_gained': 10.0,
+        'preterm_birth_odds_ratio': None,
+        'monetary_value_per_ptb': None
+    }
+    
+    if not econ_params_file.exists():
+        logger.warning(f"Economic parameters file not found at {econ_params_file}, using defaults")
+        return default_params
+    
+    try:
+        with open(econ_params_file, 'r') as f:
+            data = json.load(f)
+        
+        params = {**default_params, **data}
+        logger.info(f"Loaded economic parameters from {econ_params_file}")
+        return params
+    except Exception as e:
+        logger.error(f"Error loading economic parameters: {e}, using defaults")
+        return default_params
 
 
 def create_synthetic_data(tracts_gdf: gpd.GeoDataFrame):

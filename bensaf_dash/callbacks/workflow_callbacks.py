@@ -14,8 +14,9 @@ import pandas as pd
 import geopandas as gpd
 import plotly.graph_objects as go
 import plotly.express as px
-from dash import callback, Input, Output, State, html
+from dash import callback, Input, Output, State, html, ALL, ctx as dash_ctx
 import dash_bootstrap_components as dbc
+import dash
 
 from bensaf.workflow import Workflow
 from bensaf.mortality_functions import MortalityFunctionLibrary
@@ -25,111 +26,277 @@ cached_geojson = None
 cached_center = None
 mortality_library = None
 
+def load_saf_blend_parameters():
+    """Load SAF blend parameters from JSON file."""
+    project_root = Path(__file__).parent.parent.parent
+    saf_params_file = project_root / 'data' / 'saf_blend_parameters.json'
+    
+    if not saf_params_file.exists():
+        return [0.0, 1.0, 0.0]
+    
+    with open(saf_params_file, 'r') as f:
+        data = json.load(f)
+    
+    return data.get('polynomial_coefficients', [0.0, 1.0, 0.0])
+
+def get_workflow_config(data_config=None):
+    """Get workflow configuration from data_config store."""
+    config = {}
+    if data_config:
+        if data_config.get('crs'):
+            config['crs'] = data_config['crs']
+        if data_config.get('airport_coordinates'):
+            coords = data_config['airport_coordinates']
+            if isinstance(coords, (list, tuple)) and len(coords) == 2:
+                config['airport_coordinates'] = tuple(coords)
+    return config
+
+def load_case_studies():
+    """Load and validate case studies from JSON metadata file."""
+    project_root = Path(__file__).parent.parent.parent
+    case_studies_file = project_root / 'data' / 'dash_examples' / 'case_studies.json'
+    
+    if not case_studies_file.exists():
+        raise FileNotFoundError(f"Case studies metadata not found at {case_studies_file}")
+    
+    with open(case_studies_file, 'r') as f:
+        data = json.load(f)
+    
+    if 'case_studies' not in data:
+        raise ValueError("Invalid case_studies.json: missing 'case_studies' key")
+    
+    return data['case_studies']
+
+def get_case_study_by_id(case_study_id):
+    """Get a specific case study by ID."""
+    case_studies = load_case_studies()
+    for case_study in case_studies:
+        if case_study.get('id') == case_study_id:
+            return case_study
+    raise ValueError(f"Case study '{case_study_id}' not found")
+
+def resolve_case_study_paths(case_study):
+    """Resolve all file paths for a case study relative to project root."""
+    project_root = Path(__file__).parent.parent.parent
+    dash_examples_dir = project_root / 'data' / 'dash_examples'
+    case_study_dir = dash_examples_dir / case_study['folder']
+    
+    files = case_study['files']
+    resolved = {}
+    
+    # Resolve basic files
+    resolved['tracts_geometries'] = case_study_dir / files['tracts_geometries']
+    resolved['demographics'] = case_study_dir / files['demographics']
+    resolved['mortality'] = case_study_dir / files['mortality']
+    
+    # Optional CSV exposure file
+    if 'exposure_csv' in files:
+        resolved['exposure_csv'] = case_study_dir / files['exposure_csv']
+    
+    # Optional AERMOD files with weights
+    if 'aermod' in files:
+        resolved['aermod'] = {}
+        resolved['aermod']['landing'] = [
+            (case_study_dir / item['file'], item['weight'])
+            for item in files['aermod']['landing']
+        ]
+        resolved['aermod']['takeoff'] = [
+            (case_study_dir / item['file'], item['weight'])
+            for item in files['aermod']['takeoff']
+        ]
+    
+    # Resolve calibration file
+    if case_study.get('calibration_file'):
+        resolved['calibration'] = case_study_dir / case_study['calibration_file']
+    else:
+        # Use shared calibration file
+        resolved['calibration'] = project_root / 'data' / 'aermod_calibration_coefficients.json'
+    
+    return resolved
+
 def register_callbacks(app):
+    
+    @app.callback(
+        [Output('data-config', 'data'),
+         Output('config-data-status', 'children')],
+        [Input('input-airport-lat', 'value'),
+         Input('input-airport-lon', 'value'),
+         Input('input-crs', 'value'),
+         Input('input-aermod-crs', 'value')],
+        State('data-config', 'data'),
+        prevent_initial_call=False
+    )
+    def update_data_config(airport_lat, airport_lon, crs, aermod_crs, current_config):
+        """Update data configuration store when inputs change."""
+        config = current_config.copy() if current_config else {}
+        
+        if airport_lat is not None and airport_lon is not None:
+            config['airport_coordinates'] = (float(airport_lat), float(airport_lon))
+            airport_status = f"Airport coordinates: ({airport_lat}, {airport_lon})"
+        else:
+            config['airport_coordinates'] = None
+            airport_status = "Airport coordinates: Not set"
+        
+        if crs:
+            config['crs'] = crs
+            crs_status = f"CRS: {crs}"
+        else:
+            config['crs'] = 'EPSG:4326'
+            crs_status = "CRS: EPSG:4326 (default)"
+        
+        if aermod_crs:
+            config['aermod_crs'] = aermod_crs
+            aermod_status = f"AERMOD CRS: {aermod_crs}"
+        else:
+            config['aermod_crs'] = 'EPSG:32616'
+            aermod_status = "AERMOD CRS: EPSG:32616 (default)"
+        
+        status_text = f"{airport_status} | {crs_status} | {aermod_status}"
+        
+        return config, html.Small(status_text, className="text-muted")
+    
+    @app.callback(
+        Output('case-study-dropdown', 'options'),
+        Input('case-studies-init', 'data'),
+        prevent_initial_call=False
+    )
+    def populate_case_study_dropdown(init_data):
+        """Populate dropdown with available case studies."""
+        try:
+            case_studies = load_case_studies()
+            options = [
+                {
+                    'label': f"{cs['name']}{' - ' + cs['description'] if cs.get('description') else ''}",
+                    'value': cs['id']
+                }
+                for cs in case_studies
+            ]
+            return options
+        except Exception as e:
+            return [{'label': f'Error loading case studies: {str(e)}', 'value': None}]
+    
+    @app.callback(
+        Output('btn-load-example', 'disabled'),
+        Input('case-study-dropdown', 'value'),
+        prevent_initial_call=False
+    )
+    def enable_load_button(selected_case_study):
+        """Enable load button when a case study is selected."""
+        return selected_case_study is None
     
     @app.callback(
         [Output('example-load-status', 'children'),
          Output('workflow-state', 'data', allow_duplicate=True)],
         Input('btn-load-example', 'n_clicks'),
-        State('workflow-state', 'data'),
+        [State('case-study-dropdown', 'value'),
+         State('workflow-state', 'data'),
+         State('data-config', 'data')],
         prevent_initial_call=True
     )
-    def load_example_data(n_clicks, state):
-        if n_clicks is None:
+    def load_example_data(n_clicks, selected_case_study_id, state, data_config):
+        if n_clicks is None or selected_case_study_id is None:
             return "", state
         
         try:
-            from pathlib import Path
+            # Get case study metadata
+            case_study = get_case_study_by_id(selected_case_study_id)
+            resolved_paths = resolve_case_study_paths(case_study)
             
-            project_root = Path(__file__).parent.parent.parent
-            data_dir = project_root / 'data' / 'ord'
-            aermod_dir = project_root / 'data' / 'aermod-examples'
+            # Validate core files exist
+            if not resolved_paths['tracts_geometries'].exists():
+                raise FileNotFoundError(f"Tract geometries not found at {resolved_paths['tracts_geometries']}")
+            if not resolved_paths['demographics'].exists():
+                raise FileNotFoundError(f"Demographics data not found at {resolved_paths['demographics']}")
+            if not resolved_paths['mortality'].exists():
+                raise FileNotFoundError(f"Mortality data not found at {resolved_paths['mortality']}")
             
-            tracts_geometries_file = data_dir / 'tracts_geometries.geojson'
-            demographics_file = data_dir / 'demographics_df.csv'
-            mortality_file = data_dir / 'mortality_df.csv'
+            exposure_source = case_study.get('exposure_source', 'aermod' if 'aermod' in resolved_paths else 'csv')
             
-            # AERMOD files for exposure generation
-            landing_eastflow_file = aermod_dir / 'landing_eastflow.ADO'
-            landing_westflow_file = aermod_dir / 'landing_westflow.ADO'
-            takeoff_eastflow_file = aermod_dir / 'takeoff_eastflow.ADO'
-            takeoff_westflow_file = aermod_dir / 'westflow_takeoff.ADO'
-            calibration_file = project_root / 'data' / 'aermod_calibration_coefficients.json'
+            if exposure_source == 'aermod':
+                if 'aermod' not in resolved_paths:
+                    raise ValueError("Case study is configured for AERMOD exposure but no AERMOD files are defined")
+                if not resolved_paths['calibration'].exists():
+                    raise FileNotFoundError(f"Calibration coefficients file not found at {resolved_paths['calibration']}")
+                for file_path, _ in resolved_paths['aermod']['landing']:
+                    if not file_path.exists():
+                        raise FileNotFoundError(f"Landing AERMOD file not found at {file_path}")
+                for file_path, _ in resolved_paths['aermod']['takeoff']:
+                    if not file_path.exists():
+                        raise FileNotFoundError(f"Takeoff AERMOD file not found at {file_path}")
+            else:
+                if 'exposure_csv' not in resolved_paths or not resolved_paths['exposure_csv'].exists():
+                    raise FileNotFoundError("Exposure CSV file not found for this case study")
             
-            if not tracts_geometries_file.exists():
-                raise FileNotFoundError(f"Tract geometries not found at {tracts_geometries_file}")
-            if not demographics_file.exists():
-                raise FileNotFoundError(f"Demographics data not found at {demographics_file}")
-            if not mortality_file.exists():
-                raise FileNotFoundError(f"Mortality data not found at {mortality_file}")
-            if not landing_eastflow_file.exists():
-                raise FileNotFoundError(f"Landing eastflow AERMOD file not found at {landing_eastflow_file}")
-            if not landing_westflow_file.exists():
-                raise FileNotFoundError(f"Landing westflow AERMOD file not found at {landing_westflow_file}")
-            if not takeoff_eastflow_file.exists():
-                raise FileNotFoundError(f"Takeoff eastflow AERMOD file not found at {takeoff_eastflow_file}")
-            if not takeoff_westflow_file.exists():
-                raise FileNotFoundError(f"Takeoff westflow AERMOD file not found at {takeoff_westflow_file}")
-            if not calibration_file.exists():
-                raise FileNotFoundError(f"Calibration coefficients file not found at {calibration_file}")
-            
-            tracts_gdf = gpd.read_file(tracts_geometries_file)
-            demographics_df = pd.read_csv(demographics_file)
-            mortality_df = pd.read_csv(mortality_file)
+            # Load data files
+            tracts_gdf = gpd.read_file(resolved_paths['tracts_geometries'])
+            demographics_df = pd.read_csv(resolved_paths['demographics'])
+            mortality_df = pd.read_csv(resolved_paths['mortality'])
             
             global workflow_instance, cached_geojson, cached_center
             cached_geojson = None
             cached_center = None
             
             if workflow_instance is None:
-                config = {
-                    'saf_polynomial_coeffs': [0.0, 1.0, 0.0]
-                }
+                config = {}
+                if data_config:
+                    if data_config.get('crs'):
+                        config['crs'] = data_config['crs']
+                    if data_config.get('airport_coordinates'):
+                        config['airport_coordinates'] = tuple(data_config['airport_coordinates'])
                 workflow_instance = Workflow(config)
             
-            # Load tract geometries
-            workflow_instance.data.load_tract_geometries(tracts_gdf)
+            # Use load_inputs for cleaner API
+            if exposure_source == 'aermod':
+                aermod_crs = data_config.get('aermod_crs', 'EPSG:32616') if data_config else 'EPSG:32616'
+                exposure_data = {
+                    'landing_files': resolved_paths['aermod']['landing'],
+                    'takeoff_files': resolved_paths['aermod']['takeoff'],
+                    'calibration_file': resolved_paths['calibration'],
+                    'aggregation_method': 'spatial_join',
+                    'aermod_crs': aermod_crs
+                }
+                exposure_source_str = 'aermod_workflow'
+            else:
+                exposure_df = pd.read_csv(resolved_paths['exposure_csv'])
+                if 'pollutant_concentration' in exposure_df.columns:
+                    exposure_df = exposure_df.rename(columns={'pollutant_concentration': 'ufp'})
+                elif 'baseline_pollutant_concentration' in exposure_df.columns:
+                    exposure_df = exposure_df.rename(columns={'baseline_pollutant_concentration': 'ufp'})
+                exposure_data = exposure_df
+                exposure_source_str = 'csv'
             
-            # Load demographics
-            workflow_instance.data.load_demographics(demographics_df)
-            
-            # Generate exposure data from AERMOD files
-            # Using weights: East = 1/3, West = 2/3 (as in the notebook)
-            landing_files = [
-                (landing_eastflow_file, 1/3),
-                (landing_westflow_file, 2/3)
-            ]
-            takeoff_files = [
-                (takeoff_eastflow_file, 1/3),
-                (takeoff_westflow_file, 2/3)
-            ]
-            
-            workflow_instance.data.load_baseline_exposure_from_aermod_workflow(
-                landing_files=landing_files,
-                takeoff_files=takeoff_files,
-                calibration_file=calibration_file,
-                aggregation_method='spatial_join'
+            workflow_instance.load_inputs(
+                tracts_gdf=tracts_gdf,
+                demographics_df=demographics_df,
+                exposure_source=exposure_source_str,
+                exposure_data=exposure_data,
+                incidence_df=mortality_df,
+                pollutant_name='ufp'
             )
             
-            # Load mortality data
-            workflow_instance.data.load_mortality_data(mortality_df)
+            n_exposure = len(workflow_instance.data.baseline_exposure)
             
             state['tracts_loaded'] = True
             state['n_tracts'] = len(tracts_gdf)
             state['demographics_loaded'] = True
             state['n_demographics'] = len(demographics_df)
             state['exposure_loaded'] = True
-            state['n_exposure'] = len(workflow_instance.data.baseline_exposure)
-            state['exposure_source'] = 'aermod'
+            state['n_exposure'] = n_exposure
+            state['exposure_source'] = exposure_source
             state['mortality_loaded'] = True
             state['n_mortality'] = len(mortality_df)
             
+            if exposure_source == 'aermod':
+                exposure_msg = f"Generated {n_exposure} exposure records from AERMOD files"
+            else:
+                exposure_msg = f"Loaded {n_exposure} exposure records from CSV"
+            
             status = dbc.Alert(
                 [
-                    html.H5("ORD Example Data Loaded Successfully!", className="alert-heading"),
+                    html.H5(f"{case_study['name']} Loaded Successfully!", className="alert-heading"),
                     html.P(f"Loaded {len(tracts_gdf)} census tract geometries"),
                     html.P(f"Loaded {len(demographics_df)} demographic records"),
-                    html.P(f"Generated {state['n_exposure']} exposure records from AERMOD files"),
+                    html.P(exposure_msg),
                     html.P(f"Loaded {len(mortality_df)} mortality records", className="mb-0")
                 ],
                 color="success",
@@ -143,7 +310,7 @@ def register_callbacks(app):
                 [
                     html.H5("Example Data Not Found", className="alert-heading"),
                     html.P(str(e)),
-                    html.P("Please ensure the ORD example data exists in data/ord/", className="mb-0")
+                    html.P("Please ensure all required files exist for this case study.", className="mb-0")
                 ],
                 color="warning",
                 className="mt-2"
@@ -164,11 +331,12 @@ def register_callbacks(app):
         [Output('upload-tracts-status', 'children'),
          Output('workflow-state', 'data', allow_duplicate=True)],
         Input('upload-tracts', 'contents'),
-        State('upload-tracts', 'filename'),
-        State('workflow-state', 'data'),
+        [State('upload-tracts', 'filename'),
+         State('workflow-state', 'data'),
+         State('data-config', 'data')],
         prevent_initial_call=True
     )
-    def upload_tract_data(contents, filename, state):
+    def upload_tract_data(contents, filename, state, data_config):
         if contents is None:
             return "", state
         
@@ -189,9 +357,7 @@ def register_callbacks(app):
             cached_center = None
             
             if workflow_instance is None:
-                config = {
-                    'saf_polynomial_coeffs': [0.0, 1.0, 0.0]
-                }
+                config = get_workflow_config(data_config)
                 workflow_instance = Workflow(config)
             
             # Load tract geometries (should only have GEOID and geometry)
@@ -220,11 +386,12 @@ def register_callbacks(app):
         [Output('upload-demographics-status', 'children'),
          Output('workflow-state', 'data', allow_duplicate=True)],
         Input('upload-demographics', 'contents'),
-        State('upload-demographics', 'filename'),
-        State('workflow-state', 'data'),
+        [State('upload-demographics', 'filename'),
+         State('workflow-state', 'data'),
+         State('data-config', 'data')],
         prevent_initial_call=True
     )
-    def upload_demographics_data(contents, filename, state):
+    def upload_demographics_data(contents, filename, state, data_config):
         if contents is None:
             return "", state
         
@@ -236,9 +403,7 @@ def register_callbacks(app):
             
             global workflow_instance
             if workflow_instance is None:
-                config = {
-                    'saf_polynomial_coeffs': [0.0, 1.0, 0.0]
-                }
+                config = get_workflow_config(data_config)
                 workflow_instance = Workflow(config)
             
             workflow_instance.data.load_demographics(demographics_df)
@@ -266,12 +431,13 @@ def register_callbacks(app):
         [Output('upload-exposure-status', 'children'),
          Output('workflow-state', 'data', allow_duplicate=True)],
         Input('upload-exposure', 'contents'),
-        State('upload-exposure', 'filename'),
-        State('exposure-source-radio', 'value'),
-        State('workflow-state', 'data'),
+        [State('upload-exposure', 'filename'),
+         State('exposure-source-radio', 'value'),
+         State('workflow-state', 'data'),
+         State('data-config', 'data')],
         prevent_initial_call=True
     )
-    def upload_exposure_data(contents, filename, exposure_source, state):
+    def upload_exposure_data(contents, filename, exposure_source, state, data_config):
         if contents is None:
             return "", state
         
@@ -287,15 +453,19 @@ def register_callbacks(app):
             
             global workflow_instance
             if workflow_instance is None:
-                config = {
-                    'saf_polynomial_coeffs': [0.0, 1.0, 0.0]
-                }
+                config = get_workflow_config(data_config)
                 workflow_instance = Workflow(config)
             
             # Rename column if needed
             if 'pollutant_concentration' in exposure_df.columns:
-                exposure_df = exposure_df.rename(columns={'pollutant_concentration': 'baseline_pollutant_concentration'})
-            workflow_instance.data.load_baseline_exposure_data(exposure_df)
+                exposure_df = exposure_df.rename(columns={'pollutant_concentration': 'ufp'})
+            elif 'baseline_pollutant_concentration' in exposure_df.columns:
+                exposure_df = exposure_df.rename(columns={'baseline_pollutant_concentration': 'ufp'})
+            
+            if workflow_instance.data.tract_geometries is None:
+                raise ValueError("Tract geometries must be loaded first")
+            
+            workflow_instance.data.load_baseline_exposure(exposure_df, pollutant_columns=['ufp'])
             
             state['exposure_loaded'] = True
             state['n_exposure'] = len(exposure_df)
@@ -318,14 +488,15 @@ def register_callbacks(app):
             return status, state
     
     @app.callback(
-        [Output('upload-mortality-status', 'children'),
+        [Output('upload-mortality-incidence-status', 'children'),
          Output('workflow-state', 'data', allow_duplicate=True)],
-        Input('upload-mortality', 'contents'),
-        State('upload-mortality', 'filename'),
-        State('workflow-state', 'data'),
+        Input('upload-mortality-incidence', 'contents'),
+        [State('upload-mortality-incidence', 'filename'),
+         State('workflow-state', 'data'),
+         State('data-config', 'data')],
         prevent_initial_call=True
     )
-    def upload_mortality_data(contents, filename, state):
+    def upload_mortality_incidence_data(contents, filename, state, data_config):
         if contents is None:
             return "", state
         
@@ -333,22 +504,23 @@ def register_callbacks(app):
             content_type, content_string = contents.split(',')
             decoded = base64.b64decode(content_string)
             
-            mortality_df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
+            incidence_df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
             
             global workflow_instance
             if workflow_instance is None:
-                config = {
-                    'saf_polynomial_coeffs': [0.0, 1.0, 0.0]
-                }
+                config = get_workflow_config(data_config)
                 workflow_instance = Workflow(config)
             
-            workflow_instance.data.load_mortality_data(mortality_df)
+            if workflow_instance.data.tract_geometries is None:
+                raise ValueError("Tract geometries must be loaded first")
+            
+            workflow_instance.data.load_incidence_data(incidence_df, endpoint_columns=['mortality_rate'])
             
             state['mortality_loaded'] = True
-            state['n_mortality'] = len(mortality_df)
+            state['n_mortality'] = len(incidence_df)
             
             status = dbc.Alert(
-                f"Successfully loaded mortality data with {len(mortality_df)} records",
+                f"Successfully loaded incidence data with {len(incidence_df)} records",
                 color="success",
                 className="mt-2"
             )
@@ -357,11 +529,49 @@ def register_callbacks(app):
             
         except Exception as e:
             status = dbc.Alert(
-                f"Error loading mortality data: {str(e)}",
+                f"Error loading incidence data: {str(e)}",
                 color="danger",
                 className="mt-2"
             )
             return status, state
+    
+    @app.callback(
+        Output('mortality-pipeline-status', 'children'),
+        Input('workflow-state', 'data')
+    )
+    def update_mortality_pipeline_status(state):
+        """Update status badge for mortality pipeline."""
+        if not state:
+            return dbc.Badge("Not Ready", color="secondary", className="ms-2")
+        
+        has_data = state.get('mortality_loaded', False)
+        has_demographics = state.get('demographics_loaded', False)
+        
+        if has_data and has_demographics:
+            return dbc.Badge("Ready", color="success", className="ms-2")
+        elif has_data or has_demographics:
+            return dbc.Badge("Partial", color="warning", className="ms-2")
+        else:
+            return dbc.Badge("Not Ready", color="secondary", className="ms-2")
+    
+    @app.callback(
+        Output('preterm-birth-pipeline-status', 'children'),
+        Input('workflow-state', 'data')
+    )
+    def update_preterm_birth_pipeline_status(state):
+        """Update status badge for preterm birth pipeline."""
+        if not state:
+            return dbc.Badge("Not Ready", color="secondary", className="ms-2")
+        
+        has_data = state.get('ptb_data_loaded', False)
+        has_demographics = state.get('demographics_loaded', False)
+        
+        if has_data and has_demographics:
+            return dbc.Badge("Ready", color="success", className="ms-2")
+        elif has_data or has_demographics:
+            return dbc.Badge("Partial", color="warning", className="ms-2")
+        else:
+            return dbc.Badge("Not Ready", color="secondary", className="ms-2")
     
     @app.callback(
         Output('data-summary', 'children'),
@@ -421,76 +631,197 @@ def register_callbacks(app):
         return options, default_value
     
     @app.callback(
-        [Output('input-mean-rr', 'value'),
-         Output('input-lower-rr', 'value'),
-         Output('input-upper-rr', 'value'),
-         Output('input-unit-increase', 'value')],
+        Output('mortality-function-details', 'children'),
         Input('mortality-function-dropdown', 'value'),
         prevent_initial_call=False
     )
-    def update_function_inputs(function_id):
+    def update_function_details(function_id):
         global mortality_library
         
         if mortality_library is None:
             mortality_library = MortalityFunctionLibrary()
         
         if function_id is None:
-            function_id = 0
+            return html.Div("Select a mortality function to view details", className="text-muted")
         
         function_data = mortality_library.get_function(function_id)
         
         if function_data is None:
-            return 1.012, 1.010, 1.015, 2723
+            return html.Div("Function not found", className="text-danger")
         
-        return (
-            function_data['mean_rr'],
-            function_data['lower_rr'],
-            function_data['upper_rr'],
-            function_data['unit_increase']
-        )
+        return dbc.Card([
+            dbc.CardBody([
+                html.H6(function_data['title'], className="mb-3"),
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Mean Relative Risk", className="fw-bold"),
+                        html.P(f"{function_data['mean_rr']:.4f}", className="mb-2"),
+                    ], md=6),
+                    dbc.Col([
+                        html.Label("Unit Increase (pt/cm³)", className="fw-bold"),
+                        html.P(f"{function_data['unit_increase']:.1f}", className="mb-2"),
+                    ], md=6),
+                ]),
+                dbc.Row([
+                    dbc.Col([
+                        html.Label("Lower 95% CI", className="fw-bold"),
+                        html.P(f"{function_data['lower_rr']:.4f}", className="mb-2"),
+                    ], md=6),
+                    dbc.Col([
+                        html.Label("Upper 95% CI", className="fw-bold"),
+                        html.P(f"{function_data['upper_rr']:.4f}", className="mb-2"),
+                    ], md=6),
+                ]),
+            ])
+        ], className="bg-light")
+    
+    @app.callback(
+        Output('mortality-function-checkboxes', 'children'),
+        Input('workflow-state', 'data'),
+        prevent_initial_call=False
+    )
+    def create_mortality_function_checkboxes(state):
+        global mortality_library
+        
+        if mortality_library is None:
+            mortality_library = MortalityFunctionLibrary()
+        
+        functions = mortality_library.list_functions()
+        
+        if not functions:
+            return html.Div("No mortality functions available", className="text-muted")
+        
+        checkboxes = []
+        for func in functions:
+            checkbox_id = {'type': 'mortality-function-checkbox', 'index': func['id']}
+            checkboxes.append(
+                dbc.Checklist(
+                    options=[{'label': func['title'], 'value': func['id']}],
+                    value=[],
+                    id=checkbox_id,
+                    className="mb-2"
+                )
+            )
+        
+        return html.Div(checkboxes)
+    
+    @app.callback(
+        Output('saf-scenarios-list', 'children'),
+        Input('saf-scenarios-store', 'data'),
+        prevent_initial_call=False
+    )
+    def update_saf_scenarios_list(scenarios):
+        if not scenarios:
+            return html.Div("No scenarios defined", className="text-muted")
+        
+        items = []
+        for i, scenario in enumerate(scenarios):
+            items.append(
+                dbc.Row([
+                    dbc.Col([
+                        dbc.Input(
+                            id={'type': 'saf-scenario-input', 'index': i},
+                            type='number',
+                            value=scenario,
+                            min=0,
+                            max=50,
+                            step=1,
+                            className="mb-2"
+                        ),
+                    ], md=10),
+                    dbc.Col([
+                        dbc.Button(
+                            "×",
+                            id={'type': 'saf-scenario-remove', 'index': i},
+                            color="danger",
+                            size="sm",
+                            className="w-100 mb-2"
+                        ),
+                    ], md=2),
+                ], className="mb-2")
+            )
+        
+        return html.Div(items)
+    
+    @app.callback(
+        [Output('saf-scenarios-store', 'data'),
+         Output('saf-scenarios-status', 'children')],
+        Input('btn-add-scenario', 'n_clicks'),
+        Input({'type': 'saf-scenario-remove', 'index': ALL}, 'n_clicks'),
+        Input({'type': 'saf-scenario-input', 'index': ALL}, 'value'),
+        State('saf-scenarios-store', 'data'),
+        prevent_initial_call=False
+    )
+    def manage_saf_scenarios(add_clicks, remove_clicks, input_values, current_scenarios):
+        if not dash_ctx.triggered:
+            return current_scenarios or [25, 50], ""
+        
+        trigger_id = dash_ctx.triggered[0]['prop_id']
+        
+        if 'btn-add-scenario' in trigger_id:
+            new_scenarios = current_scenarios.copy() if current_scenarios else [25, 50]
+            new_scenarios.append(0)
+            return new_scenarios, html.Small("Scenario added", className="text-success")
+        
+        if 'saf-scenario-remove' in trigger_id:
+            import json
+            trigger_data = json.loads(trigger_id.split('.')[0])
+            index = trigger_data['index']
+            new_scenarios = current_scenarios.copy() if current_scenarios else [25, 50]
+            if 0 <= index < len(new_scenarios):
+                new_scenarios.pop(index)
+            return new_scenarios, html.Small("Scenario removed", className="text-success")
+        
+        if 'saf-scenario-input' in trigger_id:
+            if input_values:
+                valid_values = [v for v in input_values if v is not None and 0 <= v <= 50]
+                return valid_values, ""
+        
+        return current_scenarios or [25, 50], ""
+    
+    @app.callback(
+        Output('selected-mortality-functions-store', 'data'),
+        Input({'type': 'mortality-function-checkbox', 'index': ALL}, 'value'),
+        prevent_initial_call=False
+    )
+    def collect_selected_mortality_functions(checkbox_values):
+        selected = []
+        if checkbox_values:
+            for values in checkbox_values:
+                if values and isinstance(values, list):
+                    selected.extend(values)
+                elif values:
+                    selected.append(values)
+        return list(set(selected)) if selected else []
     
     @app.callback(
         [Output('config-status', 'children'),
          Output('workflow-state', 'data', allow_duplicate=True)],
-        Input('input-mean-rr', 'value'),
-        Input('input-lower-rr', 'value'),
-        Input('input-upper-rr', 'value'),
-        Input('input-unit-increase', 'value'),
-        Input('poly-coeff-0', 'value'),
-        Input('poly-coeff-1', 'value'),
-        Input('poly-coeff-2', 'value'),
-        Input('scenario-1', 'value'),
-        Input('scenario-2', 'value'),
-        Input('scenario-3', 'value'),
+        Input('selected-mortality-functions-store', 'data'),
+        Input('saf-scenarios-store', 'data'),
         State('workflow-state', 'data'),
         prevent_initial_call=True
     )
-    def update_config(mean_rr, lower_rr, upper_rr, unit_increase,
-                     poly_coeff_0, poly_coeff_1, poly_coeff_2,
-                     scenario_1, scenario_2, scenario_3, state):
-        
+    def update_config(selected_functions, scenarios, state):
         global workflow_instance
         
         if workflow_instance is not None:
-            if mean_rr is not None and lower_rr is not None and upper_rr is not None and unit_increase is not None:
-                workflow_instance.set_health_impact_function(
-                    mean_rr=mean_rr,
-                    lower_rr=lower_rr,
-                    upper_rr=upper_rr,
-                    unit_increase=unit_increase
-                )
+            # SAF polynomial coefficients are now loaded from JSON in the workflow
             
-            # Update SAF polynomial coefficients in config
-            workflow_instance.config.saf_polynomial_coeffs = [
-                poly_coeff_0 if poly_coeff_0 is not None else 0.0,
-                poly_coeff_1 if poly_coeff_1 is not None else 1.0,
-                poly_coeff_2 if poly_coeff_2 is not None else 0.0
-            ]
+            # Set health endpoints for selected mortality functions
+            global mortality_library
+            if mortality_library is None:
+                mortality_library = MortalityFunctionLibrary()
+            
+            # Clear existing health endpoints
+            workflow_instance.config.health_endpoints = []
+            # Health endpoints are now loaded by pipelines from JSON
+            # No need to configure them here
         
         state['config_set'] = True
         state['config_explicitly_set'] = True
-        state['scenarios'] = [s for s in [scenario_1, scenario_2, scenario_3] if s is not None]
-        state['poly_coeffs'] = [poly_coeff_0, poly_coeff_1, poly_coeff_2]
+        state['scenarios'] = scenarios if scenarios else [25, 50]
+        state['selected_mortality_functions'] = selected_functions if selected_functions else []
         
         status = dbc.Alert(
             "Configuration updated successfully",
@@ -501,6 +832,44 @@ def register_callbacks(app):
         return status, state
     
     @app.callback(
+        [Output('upload-ptb-status', 'children'),
+         Output('workflow-state', 'data', allow_duplicate=True)],
+        Input('upload-ptb-data', 'contents'),
+        State('upload-ptb-data', 'filename'),
+        State('workflow-state', 'data'),
+        prevent_initial_call=True
+    )
+    def upload_preterm_birth_data(contents, filename, state):
+        if contents is None:
+            return "", state
+        
+        try:
+            global workflow_instance
+            
+            if workflow_instance is None:
+                return dbc.Alert("Workflow not initialized. Please load data first.", color="warning"), state
+            
+            content_type, content_string = contents.split(',')
+            decoded = base64.b64decode(content_string)
+            
+            if filename.endswith('.csv'):
+                ptb_df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
+            else:
+                return dbc.Alert("Unsupported file format. Please upload a CSV file.", color="danger"), state
+            
+            # Load preterm birth data
+            workflow_instance.data.load_preterm_birth_data(ptb_df)
+            
+            state['ptb_data_loaded'] = True
+            
+            status = html.Span(f"✓ Loaded {len(ptb_df)} records from {filename}", className="text-success")
+            return status, state
+            
+        except Exception as e:
+            status = html.Span(f"✗ Error loading file: {str(e)}", className="text-danger")
+            return status, state
+    
+    @app.callback(
         Output('btn-run-analysis', 'disabled'),
         Input('workflow-state', 'data')
     )
@@ -508,10 +877,12 @@ def register_callbacks(app):
         if not state:
             return True
         
+        # Core required data: tracts, demographics, exposure
+        # Mortality and preterm birth are optional (pipeline-specific)
         all_loaded = (
             state.get('tracts_loaded', False) and
+            state.get('demographics_loaded', False) and
             state.get('exposure_loaded', False) and
-            state.get('mortality_loaded', False) and
             state.get('config_set', False) and
             state.get('config_explicitly_set', False) and
             state.get('config_tab_visited', False)
@@ -524,9 +895,12 @@ def register_callbacks(app):
          Output('analysis-results', 'data')],
         Input('btn-run-analysis', 'n_clicks'),
         State('workflow-state', 'data'),
+        State('saf-scenarios-store', 'data'),
         prevent_initial_call=True
     )
-    def run_analysis(n_clicks, state):
+    def run_analysis(n_clicks, state, scenarios_store):
+        import traceback
+        
         if n_clicks is None:
             return "", {}
         
@@ -536,36 +910,37 @@ def register_callbacks(app):
             if workflow_instance is None:
                 raise ValueError("Workflow not initialized. Please load data first.")
             
-            scenarios = state.get('scenarios', [25, 50, 75])
+            scenarios = scenarios_store if scenarios_store else state.get('scenarios', [25, 50])
             
             # Update config with scenarios
             workflow_instance.config.saf_scenarios = scenarios
             
-            # Apply control scenarios and calculate health impacts
-            workflow_instance.apply_control_scenarios(scenarios, use_saf_polynomial=True)
-            workflow_instance.calculate_health_impacts()
-            
-            # Get aggregated results
-            aggregated_results = workflow_instance.aggregated_results
+            # Run scenarios (this replaces apply_control_scenarios + calculate_health_impacts)
+            aggregated_results = workflow_instance.run_scenarios(scenarios=scenarios, pollutant_name='ufp')
             
             results = {}
             for scenario in scenarios:
-                scenario_name = f"{scenario}% SAF Usage"
+                scenario_id = int(scenario)
                 
-                if scenario_name in aggregated_results:
-                    scenario_results = aggregated_results[scenario_name]
-                    total_cases = scenario_results['total_attributable_cases']['mean']
-                    lower_cases = scenario_results['total_attributable_cases']['lower']
-                    upper_cases = scenario_results['total_attributable_cases']['upper']
+                if scenario_id in aggregated_results:
+                    scenario_agg = aggregated_results[scenario_id]
+                    scenario_result = workflow_instance.data.scenario_results[scenario_id]
                     
-                    # Get pollutant reduction from scenario outputs
-                    if scenario_name in workflow_instance.data.scenario_outputs:
-                        scenario_df = workflow_instance.data.scenario_outputs[scenario_name]
-                        pollutant_reduction = scenario_df['pollutant_reduction'].iloc[0] if 'pollutant_reduction' in scenario_df.columns else scenario
+                    # Get mortality endpoint results
+                    if 'mortality' in scenario_agg:
+                        mortality_agg = scenario_agg['mortality']
+                        total_cases = mortality_agg['total_attributable_cases']['mean']
+                        lower_cases = mortality_agg['total_attributable_cases']['lower']
+                        upper_cases = mortality_agg['total_attributable_cases']['upper']
                     else:
-                        pollutant_reduction = scenario
+                        # Fallback if mortality endpoint not found
+                        total_cases = 0.0
+                        lower_cases = 0.0
+                        upper_cases = 0.0
                     
-                    results[str(scenario)] = {
+                    pollutant_reduction = scenario_result.pollutant_reduction
+                    
+                    result_dict = {
                         'scenario': scenario,
                         'saf_percentage': scenario,
                         'pollutant_reduction': float(pollutant_reduction),
@@ -573,6 +948,26 @@ def register_callbacks(app):
                         'lower_cases': float(lower_cases),
                         'upper_cases': float(upper_cases)
                     }
+                    
+                    # Add economic benefits if available
+                    if 'economic_benefits' in scenario_agg:
+                        econ_agg = scenario_agg['economic_benefits']
+                        if 'mortality_economic_value' in econ_agg:
+                            result_dict['mortality_economic_value'] = float(econ_agg['mortality_economic_value']['mean'])
+                            result_dict['mortality_economic_value_lower'] = float(econ_agg['mortality_economic_value']['lower'])
+                            result_dict['mortality_economic_value_upper'] = float(econ_agg['mortality_economic_value']['upper'])
+                        
+                        if 'preterm_birth_economic_value' in econ_agg:
+                            result_dict['ptb_economic_value'] = float(econ_agg['preterm_birth_economic_value']['mean'])
+                            result_dict['ptb_economic_value_lower'] = float(econ_agg['preterm_birth_economic_value']['lower'])
+                            result_dict['ptb_economic_value_upper'] = float(econ_agg['preterm_birth_economic_value']['upper'])
+                        
+                        if 'total_economic_benefits' in econ_agg:
+                            result_dict['total_economic_benefits'] = float(econ_agg['total_economic_benefits']['mean'])
+                            result_dict['total_economic_benefits_lower'] = float(econ_agg['total_economic_benefits']['lower'])
+                            result_dict['total_economic_benefits_upper'] = float(econ_agg['total_economic_benefits']['upper'])
+                    
+                    results[str(scenario)] = result_dict
             
             status = html.Div([
                 html.Span("✓ Analysis Complete! ", className="text-success fw-bold"),
@@ -583,9 +978,15 @@ def register_callbacks(app):
             return status, results
             
         except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
+            print(f"Analysis error traceback:\n{error_traceback}")
+            
             status = html.Div([
                 html.Span("✗ Analysis Failed: ", className="text-danger fw-bold"),
-                html.Span(str(e), className="text-muted")
+                html.Span(str(e), className="text-muted"),
+                html.Br(),
+                html.Small(f"See console for full traceback", className="text-muted")
             ])
             return status, {}
     
@@ -662,27 +1063,80 @@ def register_callbacks(app):
         
         fig = go.Figure()
         
+        # Check if economic benefits are available
+        has_economic = any('total_economic_benefits' in results[k] for k in results.keys())
+        has_mort_econ = any('mortality_economic_value' in results[k] for k in results.keys())
+        has_ptb_econ = any('ptb_economic_value' in results[k] for k in results.keys())
+        
+        # Add health impacts bar
         fig.add_trace(go.Bar(
             x=scenarios,
             y=mean_cases,
-            name='Mean',
+            name='Health Impacts (Cases)',
             error_y=dict(
                 type='data',
                 symmetric=False,
                 array=[u - m for u, m in zip(upper_cases, mean_cases)],
                 arrayminus=[m - l for m, l in zip(mean_cases, lower_cases)]
             ),
-            marker_color='rgb(55, 83, 109)'
+            marker_color='rgb(55, 83, 109)',
+            yaxis='y'
         ))
         
-        fig.update_layout(
-            title='Health Impacts by SAF Scenario',
-            xaxis_title='SAF Blend Percentage',
-            yaxis_title='Attributable Cases Avoided',
-            template='plotly_white',
-            height=400,
-            uirevision='constant'
-        )
+        # Add economic benefits if available
+        if has_economic or has_mort_econ or has_ptb_econ:
+            econ_values = []
+            econ_lower = []
+            econ_upper = []
+            
+            for scenario_key in sorted(results.keys(), key=lambda x: int(x)):
+                scenario_results = results[scenario_key]
+                if 'total_economic_benefits' in scenario_results:
+                    econ_values.append(scenario_results['total_economic_benefits'] / 1e6)  # Convert to millions
+                    econ_lower.append(scenario_results.get('total_economic_benefits_lower', 0) / 1e6)
+                    econ_upper.append(scenario_results.get('total_economic_benefits_upper', 0) / 1e6)
+                elif 'mortality_economic_value' in scenario_results:
+                    econ_values.append(scenario_results['mortality_economic_value'] / 1e6)
+                    econ_lower.append(scenario_results.get('mortality_economic_value_lower', 0) / 1e6)
+                    econ_upper.append(scenario_results.get('mortality_economic_value_upper', 0) / 1e6)
+                else:
+                    econ_values.append(0)
+                    econ_lower.append(0)
+                    econ_upper.append(0)
+            
+            fig.add_trace(go.Bar(
+                x=scenarios,
+                y=econ_values,
+                name='Economic Benefits ($M)',
+                error_y=dict(
+                    type='data',
+                    symmetric=False,
+                    array=[u - m for u, m in zip(econ_upper, econ_values)],
+                    arrayminus=[m - l for m, l in zip(econ_values, econ_lower)]
+                ),
+                marker_color='rgb(70, 130, 180)',
+                yaxis='y2'
+            ))
+            
+            fig.update_layout(
+                title='Health Impacts and Economic Benefits by SAF Scenario',
+                xaxis_title='SAF Blend Percentage',
+                yaxis=dict(title='Attributable Cases Avoided', side='left'),
+                yaxis2=dict(title='Economic Benefits ($M)', side='right', overlaying='y'),
+                template='plotly_white',
+                height=400,
+                uirevision='constant',
+                barmode='group'
+            )
+        else:
+            fig.update_layout(
+                title='Health Impacts by SAF Scenario',
+                xaxis_title='SAF Blend Percentage',
+                yaxis_title='Attributable Cases Avoided',
+                template='plotly_white',
+                height=400,
+                uirevision='constant'
+            )
         
         return fig
     
@@ -719,6 +1173,8 @@ def register_callbacks(app):
         if not selected_scenario or not results:
             return [], True, None
         
+        global workflow_instance
+        
         options = [
             {'label': 'Attributable Cases Avoided', 'value': 'attributable_cases'},
             {'label': 'Attributable Fraction', 'value': 'attributable_fraction'},
@@ -726,6 +1182,18 @@ def register_callbacks(app):
             {'label': 'Delta Concentration', 'value': 'delta_concentration'},
             {'label': 'Reduced Concentration', 'value': 'reduced_concentration'},
         ]
+        
+        # Add economic benefit options if available
+        if workflow_instance is not None and workflow_instance.data.scenario_results:
+            scenario_id = int(selected_scenario)
+            if scenario_id in workflow_instance.data.scenario_results:
+                scenario_result = workflow_instance.data.scenario_results[scenario_id]
+                if 'mortality_economic_value_mean' in scenario_result.economic_benefits:
+                    options.append({'label': 'Mortality Economic Value ($)', 'value': 'mortality_economic_value'})
+                if 'preterm_birth_economic_value_mean' in scenario_result.economic_benefits:
+                    options.append({'label': 'Preterm Birth Economic Value ($)', 'value': 'preterm_birth_economic_value'})
+                if 'preterm_birth_reduction_mean' in scenario_result.economic_benefits:
+                    options.append({'label': 'Preterm Birth Reduction', 'value': 'preterm_birth_reduction'})
         
         if current_value is None:
             return options, False, options[0]['value']
@@ -762,7 +1230,7 @@ def register_callbacks(app):
                 uirevision='constant'
             )
         
-        if not results or not workflow_instance.data.scenario_outputs:
+        if not results or not workflow_instance.data.scenario_results:
             return go.Figure().update_layout(
                 title="No analysis results available",
                 height=600,
@@ -795,9 +1263,9 @@ def register_callbacks(app):
             )
         
         scenario_num = int(selected_scenario)
-        scenario_name = f"{scenario_num}% SAF Usage"
+        scenario_id = scenario_num
         
-        if scenario_name not in workflow_instance.data.scenario_outputs:
+        if scenario_id not in workflow_instance.data.scenario_results:
             return go.Figure().update_layout(
                 title=f"Scenario {scenario_num}% not found",
                 height=600,
@@ -806,15 +1274,21 @@ def register_callbacks(app):
         
         # Get merged data with all scenario outputs
         gdf = workflow_instance.data.get_merged_data()
-        scenario_df = workflow_instance.data.scenario_outputs[scenario_name]
+        scenario_result = workflow_instance.data.scenario_results[scenario_id]
+        scenario_df = scenario_result.to_dataframe()
+        scenario_name = scenario_result.scenario_label
         
         # Map variable names to column names in scenario outputs
+        # Health impacts are now nested under endpoint names (e.g., 'mortality_attributable_cases_mean')
         variable_mapping = {
-            'attributable_cases': ('attributable_cases_mean', 'Attributable Cases Avoided'),
-            'attributable_fraction': ('attributable_fraction_mean', 'Attributable Fraction'),
-            'relative_risk': ('relative_risk_mean', 'Relative Risk'),
+            'attributable_cases': ('mortality_attributable_cases_mean', 'Attributable Cases Avoided'),
+            'attributable_fraction': ('mortality_attributable_fraction_mean', 'Attributable Fraction'),
+            'relative_risk': ('mortality_relative_risk_mean', 'Relative Risk'),
             'delta_concentration': ('delta_concentration', 'Delta Concentration (pt/cm³)'),
-            'reduced_concentration': ('reduced_concentration', 'Reduced Concentration (pt/cm³)')
+            'reduced_concentration': ('reduced_concentration', 'Reduced Concentration (pt/cm³)'),
+            'mortality_economic_value': ('mortality_economic_value_mean', 'Mortality Economic Value ($)'),
+            'preterm_birth_economic_value': ('preterm_birth_economic_value_mean', 'Preterm Birth Economic Value ($)'),
+            'preterm_birth_reduction': ('preterm_birth_reduction_mean', 'Preterm Birth Reduction')
         }
         
         if selected_variable not in variable_mapping:
@@ -822,7 +1296,7 @@ def register_callbacks(app):
         
         column_name, colorbar_title = variable_mapping[selected_variable]
         
-        # Check if column exists in scenario outputs or merged data
+        # Check if column exists in merged data (which has prefixed scenario columns)
         prefixed_column = f"{scenario_name}_{column_name}"
         if prefixed_column in gdf.columns:
             z_column = prefixed_column
@@ -850,9 +1324,22 @@ def register_callbacks(app):
                     uirevision='constant'
                 )
             
-            centroids = gdf_simplified.geometry.centroid
-            center_lat = centroids.y.mean()
-            center_lon = centroids.x.mean()
+            # Project to a projected CRS for centroid calculation to avoid geographic CRS warning
+            if gdf_simplified.crs and gdf_simplified.crs.is_geographic:
+                # Use Web Mercator for centroid calculation
+                gdf_projected = gdf_simplified.to_crs('EPSG:3857')
+                centroids = gdf_projected.geometry.centroid
+                # Calculate mean in projected CRS, then convert back to geographic
+                mean_x = centroids.x.mean()
+                mean_y = centroids.y.mean()
+                mean_point = gpd.GeoDataFrame([1], geometry=gpd.points_from_xy([mean_x], [mean_y]), crs='EPSG:3857')
+                mean_point_geo = mean_point.to_crs(gdf_simplified.crs)
+                center_lat = mean_point_geo.geometry.iloc[0].y
+                center_lon = mean_point_geo.geometry.iloc[0].x
+            else:
+                centroids = gdf_simplified.geometry.centroid
+                center_lat = centroids.y.mean()
+                center_lon = centroids.x.mean()
             
             cached_geojson = gdf_json
             cached_center = (center_lat, center_lon)
@@ -871,16 +1358,27 @@ def register_callbacks(app):
             'attributable_fraction': 'Attributable Fraction',
             'relative_risk': 'Relative Risk',
             'delta_concentration': 'Delta Concentration',
-            'reduced_concentration': 'Reduced Concentration'
+            'reduced_concentration': 'Reduced Concentration',
+            'mortality_economic_value': 'Mortality Economic Value',
+            'preterm_birth_economic_value': 'Preterm Birth Economic Value',
+            'preterm_birth_reduction': 'Preterm Birth Reduction'
         }
         var_label = variable_labels.get(selected_variable, selected_variable)
         title_text = f'{var_label} by Census Tract ({scenario_num}% SAF)'
+        
+        # Choose colorscale based on variable type
+        if 'economic' in selected_variable.lower():
+            colorscale = "Blues"
+        elif 'reduction' in selected_variable.lower() or 'ptb' in selected_variable.lower():
+            colorscale = "OrRd"
+        else:
+            colorscale = "Viridis"
         
         fig = go.Figure(go.Choroplethmapbox(
             geojson=gdf_json,
             locations=locations,
             z=z_values,
-            colorscale="Viridis",
+            colorscale=colorscale,
             marker_opacity=0.5,
             marker_line_width=0.5,
             marker_line_color='white',
@@ -913,25 +1411,25 @@ def register_callbacks(app):
         
         global workflow_instance
         
-        if workflow_instance is None or not workflow_instance.data.scenario_outputs:
+        if workflow_instance is None or not workflow_instance.data.scenario_results:
             return ""
         
         scenario_num = int(selected_scenario)
-        scenario_name = f"{scenario_num}% SAF Usage"
+        scenario_id = scenario_num
         
-        if scenario_name not in workflow_instance.data.scenario_outputs:
+        if scenario_id not in workflow_instance.data.scenario_results:
             return ""
         
-        scenario_df = workflow_instance.data.scenario_outputs[scenario_name]
+        scenario_result = workflow_instance.data.scenario_results[scenario_id]
         
         summary_data = []
         
-        if 'pollutant_reduction' in scenario_df.columns:
-            pollutant_reduction = scenario_df['pollutant_reduction'].iloc[0]
-            summary_data.append({
-                'Metric': 'Pollutant Reduction',
-                'Value': f"{pollutant_reduction:.2f}%"
-            })
+        # Get pollutant reduction from scenario result
+        pollutant_reduction = scenario_result.pollutant_reduction
+        summary_data.append({
+            'Metric': 'Pollutant Reduction',
+            'Value': f"{pollutant_reduction:.2f}%"
+        })
         
         if str(scenario_num) in results:
             scenario_results = results[str(scenario_num)]
@@ -1009,7 +1507,8 @@ def register_callbacks(app):
         if workflow_instance is None or workflow_instance.data.tract_geometries is None:
             return [], None
         
-        gdf = workflow_instance.data.get_merged_data()
+        # Use get_merged_core_data() to exclude covariates
+        gdf = workflow_instance.data.get_merged_core_data()
         available_cols = [col for col in gdf.columns if col not in ['geometry']]
         
         options = [
@@ -1060,7 +1559,8 @@ def register_callbacks(app):
                 uirevision='constant'
             )
         
-        gdf = workflow_instance.data.get_merged_data()
+        # Use core data only (excludes covariates)
+        gdf = workflow_instance.data.get_merged_core_data()
         
         if selected_variable not in gdf.columns:
             available_cols = [col for col in gdf.columns if col not in ['geometry']]
@@ -1095,9 +1595,23 @@ def register_callbacks(app):
             gdf_simplified['geometry'] = gdf_simplified.geometry.simplify(tolerance=0.001, preserve_topology=True)
             
             gdf_json = json.loads(gdf_simplified.to_json())
-            centroids = gdf_simplified.geometry.centroid
-            center_lat = centroids.y.mean()
-            center_lon = centroids.x.mean()
+            
+            # Project to a projected CRS for centroid calculation to avoid geographic CRS warning
+            if gdf_simplified.crs and gdf_simplified.crs.is_geographic:
+                # Use Web Mercator for centroid calculation
+                gdf_projected = gdf_simplified.to_crs('EPSG:3857')
+                centroids = gdf_projected.geometry.centroid
+                # Calculate mean in projected CRS, then convert back to geographic
+                mean_x = centroids.x.mean()
+                mean_y = centroids.y.mean()
+                mean_point = gpd.GeoDataFrame([1], geometry=gpd.points_from_xy([mean_x], [mean_y]), crs='EPSG:3857')
+                mean_point_geo = mean_point.to_crs(gdf_simplified.crs)
+                center_lat = mean_point_geo.geometry.iloc[0].y
+                center_lon = mean_point_geo.geometry.iloc[0].x
+            else:
+                centroids = gdf_simplified.geometry.centroid
+                center_lat = centroids.y.mean()
+                center_lon = centroids.x.mean()
             
             cached_geojson = gdf_json
             cached_center = (center_lat, center_lon)
@@ -1139,27 +1653,19 @@ def register_callbacks(app):
     
     @app.callback(
         Output('saf-reduction-curve', 'figure'),
-        Input('poly-coeff-0', 'value'),
-        Input('poly-coeff-1', 'value'),
-        Input('poly-coeff-2', 'value'),
-        Input('scenario-1', 'value'),
-        Input('scenario-2', 'value'),
-        Input('scenario-3', 'value')
+        Input('saf-scenarios-store', 'data')
     )
-    def update_saf_curve(poly_coeff_0, poly_coeff_1, poly_coeff_2,
-                        scenario_1, scenario_2, scenario_3):
+    def update_saf_curve(scenarios):
         import numpy as np
         
-        coeffs = [
-            poly_coeff_0 if poly_coeff_0 is not None else 0.0,
-            poly_coeff_1 if poly_coeff_1 is not None else 1.0,
-            poly_coeff_2 if poly_coeff_2 is not None else 0.0
-        ]
+        coeffs = load_saf_blend_parameters()
         
         saf_range = np.linspace(0, 100, 101)
         
+        # Calculate reductions (negative values, clamped to [-100, 0])
+        # Multiply by 100 to convert from decimal to percentage
         reductions = np.array([
-            max(0.0, min(100.0, sum(coeff * (saf ** i) for i, coeff in enumerate(coeffs))))
+            max(-100.0, min(0.0, sum(coeff * (saf ** i) for i, coeff in enumerate(coeffs)) * 100))
             for saf in saf_range
         ])
         
@@ -1173,19 +1679,20 @@ def register_callbacks(app):
             line=dict(color='blue', width=3)
         ))
         
-        scenarios = [s for s in [scenario_1, scenario_2, scenario_3] if s is not None]
+        scenarios_list = scenarios if scenarios else [25, 50]
         scenario_reductions = [
-            max(0.0, min(100.0, sum(coeff * (s ** i) for i, coeff in enumerate(coeffs))))
-            for s in scenarios
+            max(-100.0, min(0.0, sum(coeff * (s ** i) for i, coeff in enumerate(coeffs)) * 100))
+            for s in scenarios_list
         ]
         
-        fig.add_trace(go.Scatter(
-            x=scenarios,
-            y=scenario_reductions,
-            mode='markers',
-            name='Analysis Scenarios',
-            marker=dict(color='red', size=12, symbol='circle')
-        ))
+        if scenarios_list:
+            fig.add_trace(go.Scatter(
+                x=scenarios_list,
+                y=scenario_reductions,
+                mode='markers',
+                name='Analysis Scenarios',
+                marker=dict(color='red', size=12, symbol='circle')
+            ))
         
         equation_text = f"Reduction = {coeffs[0]:.3f} + {coeffs[1]:.3f}·SAF + {coeffs[2]:.5f}·SAF²"
         
@@ -1212,7 +1719,7 @@ def register_callbacks(app):
         )
         
         fig.update_xaxes(range=[0, 100])
-        fig.update_yaxes(range=[0, 100])
+        fig.update_yaxes(range=[-100, 0])
         
         return fig
     
@@ -1229,7 +1736,8 @@ def register_callbacks(app):
                 color="info"
             )
         
-        gdf = workflow_instance.data.get_merged_data()
+        # Use core data only (excludes covariates)
+        gdf = workflow_instance.data.get_merged_core_data()
         
         # Reset index to show GEOID as a column if it's the index
         if gdf.index.name == 'GEOID' or isinstance(gdf.index, pd.Index):
@@ -1387,12 +1895,13 @@ def register_callbacks(app):
         [Output('generate-exposure-status', 'children'),
          Output('workflow-state', 'data', allow_duplicate=True)],
         Input('btn-generate-exposure', 'n_clicks'),
-        State('workflow-state', 'data'),
-        State('landing-weights-input', 'value'),
-        State('takeoff-weights-input', 'value'),
+        [State('workflow-state', 'data'),
+         State('landing-weights-input', 'value'),
+         State('takeoff-weights-input', 'value'),
+         State('data-config', 'data')],
         prevent_initial_call=True
     )
-    def generate_exposure_from_aermod(n_clicks, state, landing_weights_str, takeoff_weights_str):
+    def generate_exposure_from_aermod(n_clicks, state, landing_weights_str, takeoff_weights_str, data_config):
         if n_clicks is None:
             return "", state
         
@@ -1400,9 +1909,7 @@ def register_callbacks(app):
             global workflow_instance
             
             if workflow_instance is None:
-                config = {
-                    'saf_polynomial_coeffs': [0.0, 1.0, 0.0]
-                }
+                config = get_workflow_config(data_config)
                 workflow_instance = Workflow(config)
             
             if workflow_instance.data.tract_geometries is None:
@@ -1451,13 +1958,26 @@ def register_callbacks(app):
             landing_file_tuples = [(path, weight) for (path, _), weight in zip(landing_files, landing_weights)]
             takeoff_file_tuples = [(path, weight) for (path, _), weight in zip(takeoff_files, takeoff_weights)]
             
-            # Generate exposure using spatial_join method
-            workflow_instance.data.load_baseline_exposure_from_aermod_workflow(
+            # Generate exposure using load_inputs method
+            if workflow_instance.data.tract_geometries is None:
+                raise ValueError("Tract geometries must be loaded first")
+            
+            from bensaf.exposure_generation import generate_exposure_from_aermod
+            
+            aermod_crs = data_config.get('aermod_crs', 'EPSG:32616') if data_config else 'EPSG:32616'
+            exposure_df = generate_exposure_from_aermod(
                 landing_files=landing_file_tuples,
                 takeoff_files=takeoff_file_tuples,
+                tracts_gdf=workflow_instance.data.tract_geometries.reset_index(),
                 calibration_file=calibration_file,
+                aermod_crs=aermod_crs,
                 aggregation_method='spatial_join'
             )
+            # Rename 'ufp' column if needed
+            if 'ufp' in exposure_df.columns:
+                exposure_df = exposure_df.rename(columns={'ufp': 'ufp'})
+            
+            workflow_instance.data.load_baseline_exposure(exposure_df, pollutant_columns=['ufp'])
             
             state['exposure_loaded'] = True
             state['n_exposure'] = len(workflow_instance.data.baseline_exposure)
@@ -1708,18 +2228,48 @@ def register_callbacks(app):
             lower_cases = scenario_results['lower_cases']
             upper_cases = scenario_results['upper_cases']
             
+            card_body = [
+                html.H3(f"{total_cases:.2f}", className="text-center text-primary mb-2"),
+                html.P("Attributable Cases Avoided", className="text-center text-muted mb-2"),
+                html.P(
+                    f"95% CI: [{lower_cases:.2f}, {upper_cases:.2f}]",
+                    className="text-center small text-muted mb-3"
+                )
+            ]
+            
+            # Add economic benefits if available
+            if 'total_economic_benefits' in scenario_results:
+                econ_value = scenario_results['total_economic_benefits'] / 1e6  # Convert to millions
+                econ_lower = scenario_results.get('total_economic_benefits_lower', 0) / 1e6
+                econ_upper = scenario_results.get('total_economic_benefits_upper', 0) / 1e6
+                card_body.extend([
+                    html.Hr(className="my-2"),
+                    html.H4(f"${econ_value:.2f}M", className="text-center text-success mb-2"),
+                    html.P("Total Economic Benefits", className="text-center text-muted mb-2"),
+                    html.P(
+                        f"95% CI: [${econ_lower:.2f}M, ${econ_upper:.2f}M]",
+                        className="text-center small text-muted mb-0"
+                    )
+                ])
+            elif 'mortality_economic_value' in scenario_results:
+                mort_value = scenario_results['mortality_economic_value'] / 1e6
+                mort_lower = scenario_results.get('mortality_economic_value_lower', 0) / 1e6
+                mort_upper = scenario_results.get('mortality_economic_value_upper', 0) / 1e6
+                card_body.extend([
+                    html.Hr(className="my-2"),
+                    html.H4(f"${mort_value:.2f}M", className="text-center text-success mb-2"),
+                    html.P("Mortality Economic Benefits", className="text-center text-muted mb-2"),
+                    html.P(
+                        f"95% CI: [${mort_lower:.2f}M, ${mort_upper:.2f}M]",
+                        className="text-center small text-muted mb-0"
+                    )
+                ])
+            
             cards.append(
                 dbc.Col([
                     dbc.Card([
                         dbc.CardHeader(html.H5(f"{scenario}% SAF Blend", className="mb-0")),
-                        dbc.CardBody([
-                            html.H3(f"{total_cases:.2f}", className="text-center text-primary mb-2"),
-                            html.P("Attributable Cases Avoided", className="text-center text-muted mb-2"),
-                            html.P(
-                                f"95% CI: [{lower_cases:.2f}, {upper_cases:.2f}]",
-                                className="text-center small text-muted mb-0"
-                            )
-                        ])
+                        dbc.CardBody(card_body)
                     ], className="h-100")
                 ], md=4, className="mb-3")
             )
@@ -1783,12 +2333,57 @@ def register_callbacks(app):
     
     @app.callback(
         Output('health-impact-function-plot', 'figure'),
-        Input('input-mean-rr', 'value'),
-        Input('input-lower-rr', 'value'),
-        Input('input-upper-rr', 'value'),
-        Input('input-unit-increase', 'value')
+        Input('mortality-function-dropdown', 'value')
     )
-    def update_health_impact_function_plot(mean_rr, lower_rr, upper_rr, unit_increase):
+    def update_health_impact_function_plot(function_id):
+        global mortality_library
+        
+        if mortality_library is None:
+            mortality_library = MortalityFunctionLibrary()
+        
+        if function_id is None:
+            return go.Figure().update_layout(
+                title='Health Impact Function',
+                xaxis_title='Pollutant Concentration Increase (pt/cm³)',
+                yaxis_title='Relative Risk',
+                template='plotly_white',
+                height=400,
+                annotations=[{
+                    'text': 'Select a mortality function to view the health impact function',
+                    'xref': 'paper',
+                    'yref': 'paper',
+                    'x': 0.5,
+                    'y': 0.5,
+                    'showarrow': False,
+                    'font': {'size': 14, 'color': 'gray'}
+                }],
+                uirevision='constant'
+            )
+        
+        function_data = mortality_library.get_function(function_id)
+        if function_data is None:
+            return go.Figure().update_layout(
+                title='Health Impact Function',
+                xaxis_title='Pollutant Concentration Increase (pt/cm³)',
+                yaxis_title='Relative Risk',
+                template='plotly_white',
+                height=400,
+                annotations=[{
+                    'text': 'Function not found',
+                    'xref': 'paper',
+                    'yref': 'paper',
+                    'x': 0.5,
+                    'y': 0.5,
+                    'showarrow': False,
+                    'font': {'size': 14, 'color': 'gray'}
+                }],
+                uirevision='constant'
+            )
+        
+        mean_rr = function_data['mean_rr']
+        lower_rr = function_data['lower_rr']
+        upper_rr = function_data['upper_rr']
+        unit_increase = function_data['unit_increase']
         """Create health impact function visualization"""
         import numpy as np
         

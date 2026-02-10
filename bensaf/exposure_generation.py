@@ -577,13 +577,242 @@ def generate_exposure_from_aermod(
     )
     
     # Sum landing and takeoff for total UFP
-    tracts_exposure['baseline_pollutant_concentration'] = (
+    tracts_exposure['ufp'] = (
         tracts_exposure['landing_ufp'].fillna(0) + 
         tracts_exposure['takeoff_ufp'].fillna(0)
     )
     
     logger.info(f"Generated exposure data for {len(tracts_exposure)} tracts")
-    logger.info(f"  Total UFP range: {tracts_exposure['baseline_pollutant_concentration'].min():.6f} - {tracts_exposure['baseline_pollutant_concentration'].max():.6f}")
+    logger.info(f"  Total UFP range: {tracts_exposure['ufp'].min():.6f} - {tracts_exposure['ufp'].max():.6f}")
     
-    # Return only GEOID and baseline_pollutant_concentration
-    return tracts_exposure[['GEOID', 'baseline_pollutant_concentration']]
+    # Return only GEOID and pollutant column
+    return tracts_exposure[['GEOID', 'ufp']]
+
+
+def load_exposure_from_aermod(
+    aermod_file_path: Union[str, Path, List[Union[str, Path]]],
+    tracts_gdf: gpd.GeoDataFrame,
+    section_types: Optional[List[str]] = None,
+    center_location: Optional[Tuple[float, float]] = None,
+    center_crs: Optional[str] = None,
+    aermod_crs: Optional[str] = None,
+    pollutant_name: str = 'ufp'
+) -> pd.DataFrame:
+    """
+    Load baseline exposure data from one or more AERMOD files.
+    
+    This function:
+    1. Parses AERMOD file(s) to extract concentration data
+    2. Handles coordinate transformations for polar coordinates (if center provided)
+    3. Creates point geometries from x_coord, y_coord
+    4. Intersects points with tracts
+    5. Averages concentrations within each tract
+    6. If multiple files, sums the annual average values across all files
+    
+    Args:
+        aermod_file_path: Path to AERMOD .OUT or .ADO file, or list of paths.
+                         If multiple files, annual averages are summed.
+        tracts_gdf: GeoDataFrame with census tract geometries (must have GEOID)
+        section_types: Optional list of section types to extract.
+                      If None, extracts 'ANNUAL_AVERAGE' only.
+                      Options: 'ANNUAL_AVERAGE', '1ST_HIGHEST', '2ND_HIGHEST', '3RD_HIGHEST'
+        center_location: Optional tuple (x, y) of center point in center_crs.
+                       Required for polar coordinate systems to properly convert coordinates.
+        center_crs: CRS of the center_location (e.g., 'EPSG:4326' for lat/lon).
+                   If None, uses tracts_gdf.crs.
+        aermod_crs: CRS of the AERMOD coordinate data (e.g., 'EPSG:32616' for UTM).
+                   If None, assumes same as center_crs or tracts_gdf.crs.
+        pollutant_name: Name of the pollutant column in output (default: 'ufp')
+        
+    Returns:
+        DataFrame with GEOID as index and pollutant column
+    """
+    from bensaf.aermod_parser import AermodParser
+    
+    # Normalize to list of paths
+    if isinstance(aermod_file_path, (str, Path)):
+        file_paths = [aermod_file_path]
+    else:
+        file_paths = list(aermod_file_path)
+    
+    if len(file_paths) == 0:
+        raise ValueError("At least one AERMOD file path must be provided")
+    
+    logger.info(f"Loading baseline exposure from {len(file_paths)} AERMOD file(s)")
+    
+    # Set default CRS values
+    if center_crs is None:
+        center_crs = tracts_gdf.crs if tracts_gdf.crs else 'EPSG:4326'
+    if aermod_crs is None:
+        aermod_crs = center_crs
+    
+    if section_types is None:
+        section_types = ['ANNUAL_AVERAGE']
+    
+    # Process each file and collect tract-level exposures
+    all_tract_exposures = []
+    
+    for file_idx, file_path in enumerate(file_paths):
+        logger.info(f"Processing file {file_idx + 1}/{len(file_paths)}: {file_path}")
+        
+        # Parse AERMOD file using comprehensive parser
+        parser = AermodParser(str(file_path))
+        
+        # Parse and extract concentration data
+        results = parser.parse(section_types=section_types)
+        
+        # Extract DataFrame from results dictionary
+        aermod_df = pd.DataFrame()
+        for section_type in section_types:
+            if section_type in results and isinstance(results[section_type], pd.DataFrame):
+                if len(aermod_df) == 0:
+                    aermod_df = results[section_type]
+                else:
+                    aermod_df = pd.concat([aermod_df, results[section_type]], ignore_index=True)
+        
+        if len(aermod_df) == 0:
+            logger.warning(f"No concentration data found in {file_path}, skipping")
+            continue
+        
+        # Check if we have coordinates
+        if 'x_coord' not in aermod_df.columns or 'y_coord' not in aermod_df.columns:
+            logger.warning(f"Missing coordinates in {file_path}, skipping")
+            continue
+        
+        # Handle coordinate transformations for polar coordinates
+        if center_location is not None and 'network_id' in aermod_df.columns:
+            # Transform center location to AERMOD CRS
+            center_point = gpd.GeoDataFrame(
+                [1], 
+                geometry=gpd.points_from_xy([center_location[0]], [center_location[1]]),
+                crs=center_crs
+            )
+            center_point_aermod = center_point.to_crs(aermod_crs)
+            center_x_aermod = center_point_aermod.geometry.iloc[0].x
+            center_y_aermod = center_point_aermod.geometry.iloc[0].y
+            
+            # Check if we have polar coordinates (need to recompute with proper center)
+            network_ids = aermod_df['network_id'].dropna().unique()
+            
+            for network_id in network_ids:
+                if network_id in parser.network_info:
+                    network_info = parser.network_info[network_id]
+                    if network_info.get('network_type') == 'GRIDPOLR':
+                        # Get network mask
+                        network_mask = aermod_df['network_id'] == network_id
+                        network_data = aermod_df[network_mask].copy()
+                        
+                        # Get origin from network info (the origin used by parser)
+                        origin_x = network_info.get('origin_x', 0.0)
+                        origin_y = network_info.get('origin_y', 0.0)
+                        
+                        # Parser already converted polar to cartesian using file origin
+                        # We need to adjust coordinates to use user-provided center instead
+                        # Calculate offset: new_coord = old_coord - origin + center
+                        offset_x = center_x_aermod - origin_x
+                        offset_y = center_y_aermod - origin_y
+                        
+                        # Adjust coordinates in AERMOD CRS
+                        aermod_df.loc[network_mask, 'x_coord'] = (
+                            network_data['x_coord'].values + offset_x
+                        )
+                        aermod_df.loc[network_mask, 'y_coord'] = (
+                            network_data['y_coord'].values + offset_y
+                        )
+            
+            # Transform all coordinates from AERMOD CRS to center CRS
+            points_aermod = gpd.GeoDataFrame(
+                aermod_df,
+                geometry=gpd.points_from_xy(aermod_df['x_coord'], aermod_df['y_coord']),
+                crs=aermod_crs
+            )
+            points_center = points_aermod.to_crs(center_crs)
+            
+            # Update coordinates in dataframe to center CRS
+            aermod_df['x_coord'] = points_center.geometry.x.values
+            aermod_df['y_coord'] = points_center.geometry.y.values
+        
+        # Create point geometries from coordinates
+        if center_location is not None:
+            points_crs = center_crs
+        else:
+            points_crs = aermod_crs
+            if aermod_crs != tracts_gdf.crs:
+                points_aermod = gpd.GeoDataFrame(
+                    aermod_df,
+                    geometry=gpd.points_from_xy(aermod_df['x_coord'], aermod_df['y_coord']),
+                    crs=aermod_crs
+                )
+                points_tracts_crs = points_aermod.to_crs(tracts_gdf.crs)
+                aermod_df['x_coord'] = points_tracts_crs.geometry.x.values
+                aermod_df['y_coord'] = points_tracts_crs.geometry.y.values
+                points_crs = tracts_gdf.crs
+        
+        points_gdf = gpd.GeoDataFrame(
+            aermod_df,
+            geometry=gpd.points_from_xy(aermod_df['x_coord'], aermod_df['y_coord']),
+            crs=points_crs
+        )
+        
+        # Transform to tract CRS if needed
+        if points_gdf.crs != tracts_gdf.crs:
+            logger.info(f"Transforming AERMOD points from {points_gdf.crs} to {tracts_gdf.crs}")
+            points_gdf = points_gdf.to_crs(tracts_gdf.crs)
+        
+        # Spatial join with tracts
+        points_in_tracts = gpd.sjoin(
+            points_gdf[['concentration', 'geometry']],
+            tracts_gdf.reset_index() if 'GEOID' in tracts_gdf.index.names else tracts_gdf,
+            how='inner',
+            predicate='within'
+        )
+        
+        # Group by GEOID and average concentrations for this file
+        tract_exposure = points_in_tracts.groupby('GEOID')['concentration'].mean().reset_index()
+        tract_exposure.columns = ['GEOID', pollutant_name]
+        all_tract_exposures.append(tract_exposure)
+    
+    # Combine all tract exposures
+    if len(all_tract_exposures) == 0:
+        raise ValueError("No concentration data found in any AERMOD file")
+    
+    # Sum concentrations across all files by GEOID
+    combined_exposure = all_tract_exposures[0].set_index('GEOID')
+    for tract_exposure in all_tract_exposures[1:]:
+        tract_exposure_idx = tract_exposure.set_index('GEOID')
+        combined_exposure = combined_exposure.add(
+            tract_exposure_idx, 
+            fill_value=0.0
+        )
+    
+    # Align with tract geometries (allow missing GEOIDs, will fill with mean)
+    tract_geoids = set(tracts_gdf.index if isinstance(tracts_gdf.index, pd.Index) else tracts_gdf['GEOID'].astype(int))
+    exposure_geoids = set(combined_exposure.index.astype(int))
+    
+    # Check for missing GEOIDs
+    missing_geoids = tract_geoids - exposure_geoids
+    if missing_geoids:
+        logger.warning(
+            f"{len(missing_geoids)} tracts missing exposure data from AERMOD, "
+            f"will fill with mean"
+        )
+    
+    # Reindex to match all tract GEOIDs
+    exposure_df = combined_exposure.reindex(tract_geoids)
+    
+    # Fill missing tracts with mean
+    missing = exposure_df[pollutant_name].isna().sum()
+    if missing > 0:
+        logger.warning(f"{missing} tracts missing exposure data from AERMOD, filling with mean")
+        mean_exposure = exposure_df[pollutant_name].mean()
+        exposure_df[pollutant_name] = exposure_df[pollutant_name].fillna(mean_exposure)
+    
+    exposure_df.index.name = 'GEOID'
+    exposure_df = exposure_df.reset_index()
+    
+    logger.info(
+        f"Loaded baseline exposure from {len(file_paths)} AERMOD file(s): "
+        f"{len(exposure_df)} tracts, summed concentrations"
+    )
+    
+    return exposure_df
