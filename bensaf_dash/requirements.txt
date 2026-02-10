@@ -1,0 +1,16 @@
+# BenSAF Dash Requirements
+# Install with: uv pip install -r requirements.txt
+
+dash>=2.14.0
+dash-bootstrap-components>=1.5.0
+plotly>=5.18.0
+
+# Core dependencies (should already be installed with bensaf)
+pandas>=2.0.0
+numpy>=1.24.0
+geopandas>=0.13.0
+matplotlib>=3.7.0
+
+
+
+
