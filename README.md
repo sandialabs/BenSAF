@@ -48,17 +48,89 @@ The built documentation will be available in `docs/build/html/`.
 ## Project Structure
 
 ```
-bensaf/                   # Main BenSAF Python package
+bensaf/                   # Core analysis toolkit
 ├── __init__.py
 ├── workflow.py          # Core workflow orchestration
 ├── health_impacts.py    # Health impact calculation functions
 ├── utils.py             # Utility functions and data processing
 ├── graphics.py          # Visualization and plotting utilities
+
+bensaf_gui/              # Desktop GUI application (PyQt/PySide6)
+├── model/               # MVC Model layer
+├── view/                # MVC View layer
+├── controller/          # MVC Controller layer
+
+bensaf_dash/             # Web-based dashboard (Plotly Dash)
+├── app.py               # Main Dash application
+├── layouts/             # UI layouts
+├── callbacks/           # Interactive callbacks
 ```
+
+## User Interfaces
+
+BenSAF provides multiple interfaces to suit different workflows:
+
+### 1. Web Dashboard (Dash)
+
+Launch the web-based interface:
+
+```bash
+python -m bensaf_dash.app
+```
+
+Then open your browser to `http://localhost:8050`
+
+Features:
+- Web browser-based interface
+- File upload for data
+- Interactive parameter configuration
+- Real-time visualization
+- No installation required for end users (when deployed)
+
+Install Dash dependencies:
+```bash
+uv pip install -e ".[dash]"
+```
+
+See `bensaf_dash/README.md` for detailed documentation.
+
+### 2. Desktop GUI (PyQt/PySide6)
+
+Launch the native desktop application:
+
+```bash
+python -m bensaf_gui.main
+```
+
+Features:
+- Native desktop experience
+- Offline capability
+- Rich file dialogs
+- Embedded matplotlib visualizations
+
+Install GUI dependencies:
+```bash
+uv pip install -e ".[gui]"
+```
+
+See `bensaf_gui/README.md` for detailed documentation.
+
+### 3. Python API
+
+Use BenSAF programmatically in scripts or notebooks:
+
+```python
+from bensaf.workflow import Workflow
+
+workflow = Workflow()
+# ... continue with analysis
+```
+
+All interfaces use the same core `bensaf` package, ensuring consistent results.
 
 ## Usage
 
-### Basic Usage
+### Basic Usage (Python API)
 
 ```python
 from bensaf.workflow import Workflow

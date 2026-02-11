@@ -45,3 +45,8 @@ htmlcov/
 # Distribution
 dist/
 build/
+
+
+# KLB
+output/*
+bensaf_gui/*
