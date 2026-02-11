@@ -15,9 +15,23 @@ BenSAF provides a generalized framework for:
 
 ## Installation
 
-1. Create and activate a virtual environment:
+1. Clone the repository:
 ```bash
-venv
+git clone <repository-url>
+cd BenSAF
+```
+
+2. Create and activate a virtual environment. We recommend using conda (miniconda) or uv to manage the virtual environment:
+
+   **Using miniconda:**
+```bash
+conda create -n bensaf python
+conda activate bensaf
+```
+
+   **Using uv:**
+```bash
+uv venv
 source .venv/bin/activate  # On Unix/macOS
 # or
 .venv\Scripts\activate  # On Windows
