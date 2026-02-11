@@ -1,9 +1,3 @@
-"""
-Minimal script to run ORD example through BenSAF workflow.
-
-This script demonstrates the most parsimonious API for running an analysis.
-"""
-
 from pathlib import Path
 import geopandas as gpd
 import pandas as pd
@@ -13,28 +7,51 @@ from bensaf.workflow import run_analysis
 
 # Set up paths
 project_root = Path(__file__).parent.parent
-data_dir = project_root / "data" / "dash_examples" / "ord"
+data_dir = project_root / "data" / "case-studies" / "ord"
+calibration_file = project_root / "data" / "aermod_calibration_coefficients.json"
 
 # Load data files
 print("Loading data files...")
 tracts_gdf = gpd.read_file(data_dir / "tracts_geometries.geojson")
 demographics_df = pd.read_csv(data_dir / "demographics_df.csv")
-exposure_df = pd.read_csv(data_dir / "exposure_df.csv")
 mortality_df = pd.read_csv(data_dir / "mortality_df.csv")
 
-# Rename exposure column if needed
-if 'pollutant_concentration' in exposure_df.columns:
-    exposure_df = exposure_df.rename(columns={'pollutant_concentration': 'ufp'})
+# Prepare AERMOD files with weights (following generate_exposure_from_aermod.py pattern)
+# East flow: 1/3 weight, West flow: 2/3 weight
+east_weight = 1/3
+west_weight = 2/3
+
+landing_files = [
+    (data_dir / "landing_eastflow.ADO", east_weight),
+    (data_dir / "landing_westflow.ADO", west_weight)
+]
+
+# takeoff_files = [
+#     (data_dir / "takeoff_eastflow.ADO", east_weight),
+#     (data_dir / "westflow_takeoff.ADO", west_weight)
+# ]
+takeoff_files = None
 
 print(f"Loaded {len(tracts_gdf)} tracts")
+print(f"Using AERMOD files:")
+print(f"  Landing: eastflow ({east_weight:.3f}), westflow ({west_weight:.3f})")
+print(f"  Takeoff: eastflow ({east_weight:.3f}), westflow ({west_weight:.3f})")
 
-# Run analysis using the most parsimonious API
-print("\nRunning analysis...")
+# Prepare exposure data dict for aermod_workflow
+exposure_data = {
+    'landing_files': landing_files,
+    'takeoff_files': takeoff_files,
+    'calibration_file': calibration_file,
+    'aermod_crs': 'EPSG:32616'  # UTM Zone 16N
+}
+
+# Run analysis
+print("\nGenerating exposure from AERMOD files and running analysis...")
 results = run_analysis(
     tracts_gdf=tracts_gdf,
     demographics_df=demographics_df,
-    exposure_source='csv',
-    exposure_data=exposure_df,
+    exposure_source='aermod_workflow',
+    exposure_data=exposure_data,
     incidence_df=mortality_df,
     scenarios=[25, 50],  # 25% and 50% SAF blend scenarios
     pollutant_name='ufp'
@@ -52,16 +69,24 @@ fig.suptitle('ORD Example Analysis Results', fontsize=16, fontweight='bold')
 
 # Plot 1: Baseline exposure map
 ax1 = axes[0, 0]
-# Ensure GEOID types match
-exposure_df['GEOID'] = exposure_df['GEOID'].astype(str)
-tracts_gdf['GEOID'] = tracts_gdf['GEOID'].astype(str)
-tracts_with_data = tracts_gdf.merge(
-    exposure_df[['GEOID', 'ufp']],
-    on='GEOID',
-    how='left'
-)
-tracts_with_data.plot(column='ufp', ax=ax1, legend=True, cmap='YlOrRd')
-ax1.set_title('Baseline UFP Exposure (pt/cm³)')
+# Get baseline exposure from the workflow data
+baseline_exposure = tract_level.baseline_exposure
+if baseline_exposure is not None and 'ufp' in baseline_exposure.columns:
+    # Ensure GEOID types match
+    tracts_gdf['GEOID'] = tracts_gdf['GEOID'].astype(str)
+    baseline_df = baseline_exposure['ufp'].reset_index()
+    baseline_df['GEOID'] = baseline_df['GEOID'].astype(str)
+    tracts_with_data = tracts_gdf.merge(
+        baseline_df[['GEOID', 'ufp']],
+        on='GEOID',
+        how='left'
+    )
+    tracts_with_data.plot(column='ufp', ax=ax1, legend=True, cmap='YlOrRd')
+    ax1.set_title('Baseline UFP Exposure (pt/cm³)\nGenerated from AERMOD')
+else:
+    ax1.text(0.5, 0.5, 'Baseline exposure data not available',
+             ha='center', va='center', transform=ax1.transAxes, fontsize=12)
+    ax1.set_title('Baseline UFP Exposure')
 ax1.axis('off')
 
 # Plot 2: Attributable cases avoided (25% SAF)

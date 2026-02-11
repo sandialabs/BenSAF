@@ -127,10 +127,15 @@ class Workflow:
             takeoff_files = exposure_data.get('takeoff_files')
             calibration_file = exposure_data.get('calibration_file')
             
-            if landing_files is None or takeoff_files is None or calibration_file is None:
+            if landing_files is None and takeoff_files is None:
                 raise ValueError(
-                    "exposure_data must contain 'landing_files', 'takeoff_files', and 'calibration_file' "
+                    "exposure_data must contain at least one of 'landing_files' or 'takeoff_files' "
                     "for 'aermod_workflow' source"
+                )
+            
+            if calibration_file is None:
+                raise ValueError(
+                    "exposure_data must contain 'calibration_file' for 'aermod_workflow' source"
                 )
             
             exposure_df = generate_exposure_from_aermod(
