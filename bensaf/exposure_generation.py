@@ -186,37 +186,47 @@ def load_calibration_coefficients(calibration_file: Union[str, Path]) -> Tuple[f
     return intercept, coef_landing, coef_takeoff
 
 
-def apply_calibration(landing_combined: gpd.GeoDataFrame, 
-                     takeoff_combined: gpd.GeoDataFrame,
-                     calibration_file: Union[str, Path]) -> Tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+def apply_calibration(landing_combined: Optional[gpd.GeoDataFrame], 
+                     takeoff_combined: Optional[gpd.GeoDataFrame],
+                     calibration_file: Union[str, Path]) -> Tuple[Optional[gpd.GeoDataFrame], Optional[gpd.GeoDataFrame]]:
     """
     Apply log-linear calibration to convert CO concentrations to UFP concentrations.
     
     Args:
-        landing_combined: GeoDataFrame with combined landing flow concentrations
-        takeoff_combined: GeoDataFrame with combined takeoff flow concentrations
+        landing_combined: GeoDataFrame with combined landing flow concentrations, or None to skip
+        takeoff_combined: GeoDataFrame with combined takeoff flow concentrations, or None to skip
         calibration_file: Path to JSON file with calibration coefficients
         
     Returns:
-        Tuple of (landing_ufp, takeoff_ufp) GeoDataFrames with UFP concentrations
+        Tuple of (landing_ufp, takeoff_ufp) GeoDataFrames with UFP concentrations (None if input was None)
     """
     # Load calibration coefficients
     intercept, coef_landing, coef_takeoff = load_calibration_coefficients(calibration_file)
     
-    # Convert to percentiles (rank-based, separately for landing and takeoff)
-    landing_percentile = landing_combined['concentration'].rank(pct=True)
-    takeoff_percentile = takeoff_combined['concentration'].rank(pct=True)
+    landing_ufp = None
+    takeoff_ufp = None
     
-    # Apply log-linear model components separately
-    log_ufp_landing = intercept + coef_landing * landing_percentile
-    log_ufp_takeoff = intercept + coef_takeoff * takeoff_percentile
+    if landing_combined is not None:
+        # Convert to percentiles (rank-based, separately for landing)
+        landing_percentile = landing_combined['concentration'].rank(pct=True)
+        
+        # Apply log-linear model components
+        log_ufp_landing = intercept + coef_landing * landing_percentile
+        
+        # Exponentiate to get UFP concentrations
+        landing_ufp = landing_combined.copy()
+        landing_ufp['ufp_concentration'] = np.exp(log_ufp_landing)
     
-    # Exponentiate to get UFP concentrations
-    landing_ufp = landing_combined.copy()
-    landing_ufp['ufp_concentration'] = np.exp(log_ufp_landing)
-    
-    takeoff_ufp = takeoff_combined.copy()
-    takeoff_ufp['ufp_concentration'] = np.exp(log_ufp_takeoff)
+    if takeoff_combined is not None:
+        # Convert to percentiles (rank-based, separately for takeoff)
+        takeoff_percentile = takeoff_combined['concentration'].rank(pct=True)
+        
+        # Apply log-linear model components
+        log_ufp_takeoff = intercept + coef_takeoff * takeoff_percentile
+        
+        # Exponentiate to get UFP concentrations
+        takeoff_ufp = takeoff_combined.copy()
+        takeoff_ufp['ufp_concentration'] = np.exp(log_ufp_takeoff)
     
     return landing_ufp, takeoff_ufp
 
@@ -433,8 +443,8 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
 
 
 def generate_exposure_from_aermod(
-    landing_files: List[Tuple[Union[str, Path], float]],
-    takeoff_files: List[Tuple[Union[str, Path], float]],
+    landing_files: Optional[List[Tuple[Union[str, Path], float]]],
+    takeoff_files: Optional[List[Tuple[Union[str, Path], float]]],
     tracts_gdf: gpd.GeoDataFrame,
     calibration_file: Union[str, Path],
     aermod_crs: str = 'EPSG:32616',
@@ -453,11 +463,11 @@ def generate_exposure_from_aermod(
     2. Weighted combination of flows for landing and takeoff separately
     3. Convert to percentiles and apply log-linear calibration to obtain UFP
     4. Aggregate UFP values at receptor locations to census tracts
-    5. Sum landing and takeoff UFP for total exposure
+    5. Sum landing and takeoff UFP for total exposure (if both provided)
     
     Args:
-        landing_files: List of (file_path, weight) tuples for landing flows
-        takeoff_files: List of (file_path, weight) tuples for takeoff flows
+        landing_files: List of (file_path, weight) tuples for landing flows, or None to skip
+        takeoff_files: List of (file_path, weight) tuples for takeoff flows, or None to skip
         tracts_gdf: GeoDataFrame with census tract geometries (must have GEOID)
         calibration_file: Path to JSON file with calibration coefficients
         aermod_crs: Coordinate reference system for AERMOD data
@@ -471,116 +481,140 @@ def generate_exposure_from_aermod(
     Returns:
         DataFrame with GEOID and baseline_pollutant_concentration columns
     """
+    if landing_files is None and takeoff_files is None:
+        raise ValueError("At least one of 'landing_files' or 'takeoff_files' must be provided")
+    
     logger.info("Starting AERMOD exposure generation workflow")
     
+    landing_combined = None
+    takeoff_combined = None
+    
     # Step 1: Extract annual averages from landing files
-    logger.info(f"Extracting annual averages from {len(landing_files)} landing file(s)")
-    landing_gdfs = []
-    for file_path, weight in landing_files:
-        file_path = Path(file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"Landing file not found: {file_path}")
+    if landing_files is not None:
+        logger.info(f"Extracting annual averages from {len(landing_files)} landing file(s)")
+        landing_gdfs = []
+        for file_path, weight in landing_files:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                raise FileNotFoundError(f"Landing file not found: {file_path}")
+            
+            gdf = extract_annual_average(file_path, aermod_crs=aermod_crs)
+            if gdf is None:
+                raise ValueError(f"No annual average data found in {file_path}")
+            
+            landing_gdfs.append(gdf)
+            logger.info(f"  Extracted {len(gdf)} receptor points from {file_path.name}")
         
-        gdf = extract_annual_average(file_path, aermod_crs=aermod_crs)
-        if gdf is None:
-            raise ValueError(f"No annual average data found in {file_path}")
+        # Step 2: Weighted combination of landing flows
+        logger.info("Combining landing flows with weights")
+        landing_weights = [w for _, w in landing_files]
+        landing_combined = weighted_combine_flows(
+            landing_gdfs, 
+            landing_weights,
+            aermod_crs=aermod_crs,
+            tolerance=receptor_match_tolerance
+        )
+        logger.info(f"  Combined landing: {len(landing_combined)} receptor points")
+    
+    # Step 3: Extract annual averages from takeoff files
+    if takeoff_files is not None:
+        logger.info(f"Extracting annual averages from {len(takeoff_files)} takeoff file(s)")
+        takeoff_gdfs = []
+        for file_path, weight in takeoff_files:
+            file_path = Path(file_path)
+            if not file_path.exists():
+                raise FileNotFoundError(f"Takeoff file not found: {file_path}")
+            
+            gdf = extract_annual_average(file_path, aermod_crs=aermod_crs)
+            if gdf is None:
+                raise ValueError(f"No annual average data found in {file_path}")
+            
+            takeoff_gdfs.append(gdf)
+            logger.info(f"  Extracted {len(gdf)} receptor points from {file_path.name}")
         
-        landing_gdfs.append(gdf)
-        logger.info(f"  Extracted {len(gdf)} receptor points from {file_path.name}")
+        # Step 4: Weighted combination of takeoff flows
+        logger.info("Combining takeoff flows with weights")
+        takeoff_weights = [w for _, w in takeoff_files]
+        takeoff_combined = weighted_combine_flows(
+            takeoff_gdfs,
+            takeoff_weights,
+            aermod_crs=aermod_crs,
+            tolerance=receptor_match_tolerance
+        )
+        logger.info(f"  Combined takeoff: {len(takeoff_combined)} receptor points")
     
-    # Step 2: Extract annual averages from takeoff files
-    logger.info(f"Extracting annual averages from {len(takeoff_files)} takeoff file(s)")
-    takeoff_gdfs = []
-    for file_path, weight in takeoff_files:
-        file_path = Path(file_path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"Takeoff file not found: {file_path}")
-        
-        gdf = extract_annual_average(file_path, aermod_crs=aermod_crs)
-        if gdf is None:
-            raise ValueError(f"No annual average data found in {file_path}")
-        
-        takeoff_gdfs.append(gdf)
-        logger.info(f"  Extracted {len(gdf)} receptor points from {file_path.name}")
-    
-    # Step 3: Weighted combination of flows
-    logger.info("Combining landing flows with weights")
-    landing_weights = [w for _, w in landing_files]
-    landing_combined = weighted_combine_flows(
-        landing_gdfs, 
-        landing_weights,
-        aermod_crs=aermod_crs,
-        tolerance=receptor_match_tolerance
-    )
-    logger.info(f"  Combined landing: {len(landing_combined)} receptor points")
-    
-    logger.info("Combining takeoff flows with weights")
-    takeoff_weights = [w for _, w in takeoff_files]
-    takeoff_combined = weighted_combine_flows(
-        takeoff_gdfs,
-        takeoff_weights,
-        aermod_crs=aermod_crs,
-        tolerance=receptor_match_tolerance
-    )
-    logger.info(f"  Combined takeoff: {len(takeoff_combined)} receptor points")
-    
-    # Step 4: Apply calibration to convert CO to UFP
+    # Step 5: Apply calibration to convert CO to UFP
     logger.info("Applying calibration to convert CO to UFP")
     landing_ufp, takeoff_ufp = apply_calibration(
         landing_combined,
         takeoff_combined,
         calibration_file
     )
-    logger.info(f"  Landing UFP: {len(landing_ufp)} receptor points")
-    logger.info(f"  Takeoff UFP: {len(takeoff_ufp)} receptor points")
+    if landing_ufp is not None:
+        logger.info(f"  Landing UFP: {len(landing_ufp)} receptor points")
+    if takeoff_ufp is not None:
+        logger.info(f"  Takeoff UFP: {len(takeoff_ufp)} receptor points")
     
-    # Step 5: Aggregate to census tracts
+    # Step 6: Aggregate to census tracts
     logger.info(f"Aggregating to census tracts using method: {aggregation_method}")
     
     # Ensure tracts are in AERMOD CRS for spatial operations
     tracts_aermod_crs = tracts_gdf.to_crs(aermod_crs) if tracts_gdf.crs != aermod_crs else tracts_gdf.copy()
     
+    tracts_landing = None
+    tracts_takeoff = None
+    
     # Aggregate landing UFP
-    tracts_landing = aggregate_to_tracts(
-        landing_ufp,
-        'ufp_concentration',
-        tracts_aermod_crs,
-        method=aggregation_method,
-        idw_power=idw_power,
-        idw_max_distance=idw_max_distance,
-        idw_num_neighbors=idw_num_neighbors,
-        **aggregation_kwargs
-    )
-    tracts_landing = tracts_landing.rename(columns={'ufp_concentration': 'landing_ufp'})
-    logger.info(f"  Landing UFP aggregated to {len(tracts_landing)} tracts")
+    if landing_ufp is not None:
+        tracts_landing = aggregate_to_tracts(
+            landing_ufp,
+            'ufp_concentration',
+            tracts_aermod_crs,
+            method=aggregation_method,
+            idw_power=idw_power,
+            idw_max_distance=idw_max_distance,
+            idw_num_neighbors=idw_num_neighbors,
+            **aggregation_kwargs
+        )
+        tracts_landing = tracts_landing.rename(columns={'ufp_concentration': 'landing_ufp'})
+        logger.info(f"  Landing UFP aggregated to {len(tracts_landing)} tracts")
     
     # Aggregate takeoff UFP
-    tracts_takeoff = aggregate_to_tracts(
-        takeoff_ufp,
-        'ufp_concentration',
-        tracts_aermod_crs,
-        method=aggregation_method,
-        idw_power=idw_power,
-        idw_max_distance=idw_max_distance,
-        idw_num_neighbors=idw_num_neighbors,
-        **aggregation_kwargs
-    )
-    tracts_takeoff = tracts_takeoff.rename(columns={'ufp_concentration': 'takeoff_ufp'})
-    logger.info(f"  Takeoff UFP aggregated to {len(tracts_takeoff)} tracts")
+    if takeoff_ufp is not None:
+        tracts_takeoff = aggregate_to_tracts(
+            takeoff_ufp,
+            'ufp_concentration',
+            tracts_aermod_crs,
+            method=aggregation_method,
+            idw_power=idw_power,
+            idw_max_distance=idw_max_distance,
+            idw_num_neighbors=idw_num_neighbors,
+            **aggregation_kwargs
+        )
+        tracts_takeoff = tracts_takeoff.rename(columns={'ufp_concentration': 'takeoff_ufp'})
+        logger.info(f"  Takeoff UFP aggregated to {len(tracts_takeoff)} tracts")
     
-    # Step 6: Combine landing and takeoff
-    tracts_exposure = pd.merge(
-        tracts_landing,
-        tracts_takeoff,
-        on='GEOID',
-        how='outer'
-    )
-    
-    # Sum landing and takeoff for total UFP
-    tracts_exposure['ufp'] = (
-        tracts_exposure['landing_ufp'].fillna(0) + 
-        tracts_exposure['takeoff_ufp'].fillna(0)
-    )
+    # Step 7: Combine landing and takeoff
+    if tracts_landing is not None and tracts_takeoff is not None:
+        tracts_exposure = pd.merge(
+            tracts_landing,
+            tracts_takeoff,
+            on='GEOID',
+            how='outer'
+        )
+        # Sum landing and takeoff for total UFP
+        tracts_exposure['ufp'] = (
+            tracts_exposure['landing_ufp'].fillna(0) + 
+            tracts_exposure['takeoff_ufp'].fillna(0)
+        )
+    elif tracts_landing is not None:
+        tracts_exposure = tracts_landing.copy()
+        tracts_exposure['ufp'] = tracts_exposure['landing_ufp']
+    elif tracts_takeoff is not None:
+        tracts_exposure = tracts_takeoff.copy()
+        tracts_exposure['ufp'] = tracts_exposure['takeoff_ufp']
+    else:
+        raise ValueError("No exposure data generated from landing or takeoff files")
     
     logger.info(f"Generated exposure data for {len(tracts_exposure)} tracts")
     logger.info(f"  Total UFP range: {tracts_exposure['ufp'].min():.6f} - {tracts_exposure['ufp'].max():.6f}")
