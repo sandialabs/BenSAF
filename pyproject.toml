@@ -21,6 +21,8 @@ dependencies = [
     "scipy>=1.10.0",
     "statsmodels>=0.14.0",
     "contextily>=1.5.0",
+    "dash",
+    "dash-bootstrap-components"
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
