@@ -1,169 +1,107 @@
 """
 Mortality pipeline for scenario analysis.
 
-This pipeline computes mortality health impacts and economic benefits.
-It loads its own static configuration from JSON files.
+Pure functions: receives all data and parameters as arguments,
+returns typed domain objects rather than mutating a Scenario.
 """
 
 import logging
-from typing import Dict, Optional
-from pathlib import Path
-import json
+from typing import Any, Dict, Optional, Tuple
+
 import numpy as np
+import pandas as pd
 from scipy import stats
 
-import pandas as pd
-
-from bensaf.scenario import Scenario
+from bensaf.domain import EconomicBenefit, HealthImpact, ScenarioSpec, TractEstimate
+from bensaf.data_model import AnalysisInputs
 from bensaf.health_impacts import calculate_health_impacts
 from bensaf.economic_benefits import calculate_mortality_economic_value
-from bensaf.mortality_functions import MortalityFunctionLibrary
 
 logger = logging.getLogger(__name__)
 
 
-def _load_mortality_function_config(function_id: Optional[int] = None) -> Dict:
+def run_mortality_pipeline(
+    spec: ScenarioSpec,
+    delta_concentration: pd.Series,
+    inputs: AnalysisInputs,
+    mortality_function_params: Dict[str, Any],
+    econ_params: Dict[str, Any],
+) -> Optional[Tuple[HealthImpact, Optional[EconomicBenefit]]]:
     """
-    Load mortality function configuration from JSON.
-    
+    Compute mortality health impacts and optional economic benefit.
+
     Args:
-        function_id: Optional function ID. If None, uses first available.
-        
+        spec: ScenarioSpec (used for logging only)
+        delta_concentration: Change in pollutant concentration per tract
+        inputs: AnalysisInputs providing incidence and demographics
+        mortality_function_params: Dict with mean_rr, lower_rr, upper_rr, unit_increase
+        econ_params: Dict with per_capita_consumption, life_years_gained
+
     Returns:
-        Dictionary with mortality function parameters
+        (HealthImpact, EconomicBenefit or None), or None if mortality_rate is unavailable.
     """
-    library = MortalityFunctionLibrary()
-    
-    if function_id is None:
-        functions = library.list_functions()
-        if not functions:
-            raise ValueError("No mortality functions available")
-        function_id = functions[0]['id']
-    
-    function_data = library.get_function(function_id)
-    if function_data is None:
-        raise ValueError(f"Mortality function {function_id} not found")
-    
-    return function_data
+    logger.debug(f"Running mortality pipeline for scenario {spec.scenario_id}")
 
+    if inputs.incidence is None or 'mortality_rate' not in inputs.incidence.columns:
+        logger.warning("mortality_rate column not found, skipping mortality pipeline")
+        return None
 
-def _load_economic_parameters() -> Dict:
-    """
-    Load economic parameters from JSON.
-    
-    Returns:
-        Dictionary with economic parameters
-    """
-    project_root = Path(__file__).parent.parent.parent
-    econ_params_file = project_root / 'data' / 'economic_parameters.json'
-    
-    default_params = {
-        'per_capita_consumption': None,
-        'life_years_gained': 10.0
-    }
-    
-    if not econ_params_file.exists():
-        logger.debug(f"Economic parameters file not found, using defaults")
-        return default_params
-    
-    try:
-        with open(econ_params_file, 'r') as f:
-            data = json.load(f)
-        return {**default_params, **data}
-    except Exception as e:
-        logger.warning(f"Error loading economic parameters: {e}, using defaults")
-        return default_params
+    mortality_rate = inputs.incidence['mortality_rate']
 
-
-def run_mortality_pipeline(scenario: Scenario, mortality_function_id: Optional[int] = None) -> None:
-    """
-    Run mortality pipeline to compute mortality health impacts and economic benefits.
-    
-    This pipeline:
-    1. Loads mortality function configuration from JSON
-    2. Computes mortality health impacts (attributable cases, rates, etc.)
-    3. Computes mortality economic benefits (if per_capita_consumption is configured)
-    
-    Args:
-        scenario: Scenario object with delta_concentration populated
-        mortality_function_id: Optional mortality function ID. If None, uses first available.
-    """
-    logger.debug(f"Running mortality pipeline for scenario {scenario.scenario_id}")
-    
-    if scenario.delta_concentration is None:
-        raise ValueError("Exposure pipeline must be run before mortality pipeline")
-    
-    # Load mortality function configuration
-    function_data = _load_mortality_function_config(mortality_function_id)
-    
-    # Convert to log-transformed parameters
-    z = stats.norm.ppf(0.975)  # 95% confidence interval
-    mean_log = np.log(function_data['mean_rr'])
-    lower_log = np.log(function_data['lower_rr'])
-    upper_log = np.log(function_data['upper_rr'])
-    se_log = ((upper_log - mean_log) + (mean_log - lower_log)) / (2 * z)
-    mean_log_one_unit = mean_log / function_data['unit_increase']
-    se_log_one_unit = se_log / function_data['unit_increase']
-    
-    # Get mortality rate from incidence data
-    if scenario.data.incidence is None or 'mortality_rate' not in scenario.data.incidence.columns:
-        logger.warning("Mortality rate column not found, skipping mortality pipeline")
-        return
-    
-    mortality_rate = scenario.data.incidence['mortality_rate']
-    
-    # Get population from core demographics
-    if scenario.data.demographics_core is not None and 'population' in scenario.data.demographics_core.columns:
-        population = scenario.data.demographics_core['population']
+    if inputs.demographics_core is not None and 'population' in inputs.demographics_core.columns:
+        population = inputs.demographics_core['population']
     else:
         logger.warning("No population data found, using 1.0 for all tracts")
-        population = pd.Series(1.0, index=scenario.delta_concentration.index)
-    
-    # Ensure indices align
-    common_index = scenario.delta_concentration.index.intersection(mortality_rate.index)
+        population = pd.Series(1.0, index=delta_concentration.index)
+
+    common_index = delta_concentration.index.intersection(mortality_rate.index)
     if len(common_index) == 0:
         logger.error("No common index between delta_concentration and mortality_rate")
-        return
-    
-    delta_concentration_aligned = scenario.delta_concentration.reindex(common_index, fill_value=0.0)
-    mortality_rate_aligned = mortality_rate.reindex(common_index)
-    population_aligned = population.reindex(common_index, fill_value=0.0)
-    
-    # Calculate health impacts
-    impacts = calculate_health_impacts(
-        delta_concentration=delta_concentration_aligned,
-        mortality_rate=mortality_rate_aligned,
-        population=population_aligned,
+        return None
+
+    delta_conc = delta_concentration.reindex(common_index, fill_value=0.0)
+    mort_rate = mortality_rate.reindex(common_index)
+    pop = population.reindex(common_index, fill_value=0.0)
+
+    z = stats.norm.ppf(0.975)
+    mean_log = np.log(mortality_function_params['mean_rr'])
+    lower_log = np.log(mortality_function_params['lower_rr'])
+    upper_log = np.log(mortality_function_params['upper_rr'])
+    se_log = ((upper_log - mean_log) + (mean_log - lower_log)) / (2 * z)
+    unit = mortality_function_params['unit_increase']
+    mean_log_one_unit = mean_log / unit
+    se_log_one_unit = se_log / unit
+
+    impact = calculate_health_impacts(
+        delta_concentration=delta_conc,
+        mortality_rate=mort_rate,
+        population=pop,
         mean_log_one_unit=mean_log_one_unit,
-        se_log_one_unit=se_log_one_unit
+        se_log_one_unit=se_log_one_unit,
+        endpoint='mortality',
     )
-    
-    scenario.health_impacts['mortality'] = impacts
     logger.debug("Computed mortality impacts")
-    
-    # Calculate economic benefits if configured
-    econ_params = _load_economic_parameters()
-    if econ_params.get('per_capita_consumption') is not None:
-        mean_mort_value = calculate_mortality_economic_value(
-            impacts['attributable_cases_mean'],
-            econ_params['per_capita_consumption'],
-            econ_params['life_years_gained']
+
+    econ_benefit: Optional[EconomicBenefit] = None
+    per_capita = econ_params.get('per_capita_consumption')
+    life_years = econ_params.get('life_years_gained', 10.0)
+
+    if per_capita is not None:
+        mean_val = calculate_mortality_economic_value(
+            impact.attributable_cases.mean, per_capita, life_years
         )
-        lower_mort_value = calculate_mortality_economic_value(
-            impacts['attributable_cases_lower'],
-            econ_params['per_capita_consumption'],
-            econ_params['life_years_gained']
+        lower_val = calculate_mortality_economic_value(
+            impact.attributable_cases.lower, per_capita, life_years
         )
-        upper_mort_value = calculate_mortality_economic_value(
-            impacts['attributable_cases_upper'],
-            econ_params['per_capita_consumption'],
-            econ_params['life_years_gained']
+        upper_val = calculate_mortality_economic_value(
+            impact.attributable_cases.upper, per_capita, life_years
         )
-        
-        scenario.economic_benefits['mortality_economic_value_mean'] = mean_mort_value
-        scenario.economic_benefits['mortality_economic_value_lower'] = lower_mort_value
-        scenario.economic_benefits['mortality_economic_value_upper'] = upper_mort_value
-        
-        logger.debug("Computed mortality economic benefits")
+        econ_benefit = EconomicBenefit(
+            name='mortality_economic_value',
+            value=TractEstimate(mean=mean_val, lower=lower_val, upper=upper_val),
+        )
+        logger.debug("Computed mortality economic benefit")
     else:
-        logger.debug("Economic parameters not configured, skipping mortality economic benefits")
+        logger.debug("per_capita_consumption not configured, skipping mortality economic benefit")
+
+    return impact, econ_benefit

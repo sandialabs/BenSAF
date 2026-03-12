@@ -1,126 +1,83 @@
 """
 Preterm birth pipeline for scenario analysis.
 
-This pipeline computes preterm birth reduction and economic benefits.
-It loads its own static configuration from JSON files.
+Pure functions: receives all data and parameters as arguments,
+returns typed domain objects rather than mutating a Scenario.
 """
 
 import logging
-from pathlib import Path
-import json
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from bensaf.scenario import Scenario
+from bensaf.domain import EconomicBenefit, ScenarioSpec, TractEstimate
+from bensaf.data_model import AnalysisInputs
 from bensaf.economic_benefits import (
     calculate_preterm_birth_reduction,
-    calculate_preterm_birth_economic_value
+    calculate_preterm_birth_economic_value,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _load_preterm_birth_parameters() -> dict:
+def run_preterm_birth_pipeline(
+    spec: ScenarioSpec,
+    delta_concentration: pd.Series,
+    inputs: AnalysisInputs,
+    params: Dict[str, Any],
+) -> Optional[List[EconomicBenefit]]:
     """
-    Load preterm birth parameters from JSON.
-    
-    Returns:
-        Dictionary with preterm_birth_odds_ratio and monetary_value_per_ptb
-    """
-    project_root = Path(__file__).parent.parent.parent
-    econ_params_file = project_root / 'data' / 'economic_parameters.json'
-    
-    default_params = {
-        'preterm_birth_odds_ratio': None,
-        'monetary_value_per_ptb': None
-    }
-    
-    if not econ_params_file.exists():
-        logger.debug(f"Economic parameters file not found, using defaults")
-        return default_params
-    
-    try:
-        with open(econ_params_file, 'r') as f:
-            data = json.load(f)
-        return {**default_params, **data}
-    except Exception as e:
-        logger.warning(f"Error loading economic parameters: {e}, using defaults")
-        return default_params
+    Compute preterm birth reduction and economic benefit.
 
-
-def run_preterm_birth_pipeline(scenario: Scenario) -> None:
-    """
-    Run preterm birth pipeline to compute preterm birth reduction and economic benefits.
-    
-    This pipeline:
-    1. Loads preterm birth parameters from JSON
-    2. Computes reduction in preterm births due to UFP reduction
-    3. Computes economic benefits
-    
     Args:
-        scenario: Scenario object with delta_concentration populated
+        spec: ScenarioSpec (used for logging only)
+        delta_concentration: Change in pollutant concentration per tract
+        inputs: AnalysisInputs providing preterm birth baseline data
+        params: Dict with preterm_birth_odds_ratio and monetary_value_per_ptb
+
+    Returns:
+        List of EconomicBenefit objects, or None if data/params are unavailable.
     """
-    logger.debug(f"Running preterm birth pipeline for scenario {scenario.scenario_id}")
-    
-    if scenario.delta_concentration is None:
-        raise ValueError("Exposure pipeline must be run before preterm birth pipeline")
-    
-    # Load parameters
-    params = _load_preterm_birth_parameters()
-    
-    # Check if required data and parameters are available
-    if (params['preterm_birth_odds_ratio'] is None or
-        params['monetary_value_per_ptb'] is None or
-        scenario.data.preterm_birth_core is None):
-        logger.debug("Preterm birth data or parameters not configured, skipping preterm birth pipeline")
-        return
-    
-    baseline_ptb = scenario.data.preterm_birth_core['baseline_preterm_births']
-    delta_concentration = scenario.delta_concentration
-    
-    # Ensure indices align
+    logger.debug(f"Running preterm birth pipeline for scenario {spec.scenario_id}")
+
+    odds_ratio = params.get('preterm_birth_odds_ratio')
+    monetary_value = params.get('monetary_value_per_ptb')
+
+    if odds_ratio is None or monetary_value is None or inputs.preterm_birth_core is None:
+        logger.debug(
+            "Preterm birth data or parameters not configured, skipping preterm birth pipeline"
+        )
+        return None
+
+    baseline_ptb = inputs.preterm_birth_core['baseline_preterm_births']
     common_index = delta_concentration.index.intersection(baseline_ptb.index)
     if len(common_index) == 0:
         logger.error("No common index between delta_concentration and baseline_preterm_births")
-        return
-    
-    delta_concentration_aligned = delta_concentration.reindex(common_index, fill_value=0.0)
-    baseline_ptb_aligned = baseline_ptb.reindex(common_index)
-    
-    # Calculate preterm birth reduction
-    mean_ptb_reduction = calculate_preterm_birth_reduction(
-        baseline_ptb_aligned,
-        delta_concentration_aligned,
-        params['preterm_birth_odds_ratio']
-    )
-    
-    # For lower/upper bounds, use mean for now (could be enhanced with uncertainty propagation)
-    lower_ptb_reduction = mean_ptb_reduction * 0.9
-    upper_ptb_reduction = mean_ptb_reduction * 1.1
-    
-    # Calculate economic value
-    mean_ptb_value = calculate_preterm_birth_economic_value(
-        mean_ptb_reduction,
-        params['monetary_value_per_ptb']
-    )
-    lower_ptb_value = calculate_preterm_birth_economic_value(
-        lower_ptb_reduction,
-        params['monetary_value_per_ptb']
-    )
-    upper_ptb_value = calculate_preterm_birth_economic_value(
-        upper_ptb_reduction,
-        params['monetary_value_per_ptb']
-    )
-    
-    # Populate scenario outputs
-    scenario.economic_benefits['preterm_birth_reduction_mean'] = mean_ptb_reduction
-    scenario.economic_benefits['preterm_birth_reduction_lower'] = lower_ptb_reduction
-    scenario.economic_benefits['preterm_birth_reduction_upper'] = upper_ptb_reduction
-    scenario.economic_benefits['preterm_birth_economic_value_mean'] = mean_ptb_value
-    scenario.economic_benefits['preterm_birth_economic_value_lower'] = lower_ptb_value
-    scenario.economic_benefits['preterm_birth_economic_value_upper'] = upper_ptb_value
-    
+        return None
+
+    delta_conc = delta_concentration.reindex(common_index, fill_value=0.0)
+    baseline = baseline_ptb.reindex(common_index)
+
+    mean_reduction = calculate_preterm_birth_reduction(baseline, delta_conc, odds_ratio)
+    lower_reduction = mean_reduction * 0.9
+    upper_reduction = mean_reduction * 1.1
+
+    mean_value = calculate_preterm_birth_economic_value(mean_reduction, monetary_value)
+    lower_value = calculate_preterm_birth_economic_value(lower_reduction, monetary_value)
+    upper_value = calculate_preterm_birth_economic_value(upper_reduction, monetary_value)
+
     logger.debug(
-        f"Preterm birth pipeline complete: mean reduction={mean_ptb_reduction.sum():.2f}, "
-        f"mean value=${mean_ptb_value.sum():,.0f}"
+        f"Preterm birth pipeline complete: mean reduction={mean_reduction.sum():.2f}, "
+        f"mean value=${mean_value.sum():,.0f}"
     )
+
+    return [
+        EconomicBenefit(
+            name='preterm_birth_reduction',
+            value=TractEstimate(mean=mean_reduction, lower=lower_reduction, upper=upper_reduction),
+        ),
+        EconomicBenefit(
+            name='preterm_birth_economic_value',
+            value=TractEstimate(mean=mean_value, lower=lower_value, upper=upper_value),
+        ),
+    ]
