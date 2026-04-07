@@ -39,18 +39,6 @@ def load_saf_blend_parameters():
     
     return data.get('polynomial_coefficients', [0.0, 1.0, 0.0])
 
-def get_workflow_config(data_config=None):
-    """Get workflow configuration from data_config store."""
-    config = {}
-    if data_config:
-        if data_config.get('crs'):
-            config['crs'] = data_config['crs']
-        if data_config.get('airport_coordinates'):
-            coords = data_config['airport_coordinates']
-            if isinstance(coords, (list, tuple)) and len(coords) == 2:
-                config['airport_coordinates'] = tuple(coords)
-    return config
-
 def load_case_studies():
     """Load and validate case studies from JSON metadata file."""
     project_root = Path(__file__).parent.parent.parent
@@ -114,46 +102,59 @@ def resolve_case_study_paths(case_study):
     
     return resolved
 
+
+def _aermod_weight_table_ui(filenames, id_type):
+    """Table mapping each file name to a weight input. id_type: 'landing-weight' or 'takeoff-weight'."""
+    n = len(filenames)
+    if n == 0:
+        return html.Small("No files uploaded.", className="text-muted")
+    default_w = round(1.0 / n, 6)
+    header = html.Thead(html.Tr([html.Th("File"), html.Th("Weight", style={"width": "140px"})]))
+    rows = []
+    for i, fn in enumerate(filenames):
+        rows.append(
+            html.Tr(
+                [
+                    html.Td(fn, className="align-middle text-break small"),
+                    html.Td(
+                        dbc.Input(
+                            id={"type": id_type, "index": i},
+                            type="number",
+                            value=default_w,
+                            step=0.01,
+                            min=0,
+                            className="form-control form-control-sm",
+                        )
+                    ),
+                ]
+            )
+        )
+    return dbc.Table(
+        [header, html.Tbody(rows)],
+        bordered=True,
+        striped=True,
+        size="sm",
+        className="mb-0",
+        responsive=True,
+    )
+
+
 def register_callbacks(app):
     
     @app.callback(
         [Output('data-config', 'data'),
-         Output('config-data-status', 'children')],
-        [Input('input-airport-lat', 'value'),
-         Input('input-airport-lon', 'value'),
-         Input('input-crs', 'value'),
-         Input('input-aermod-crs', 'value')],
+         Output('aermod-crs-config-status', 'children')],
+        Input('input-aermod-crs', 'value'),
         State('data-config', 'data'),
-        prevent_initial_call=False
+        prevent_initial_call=False,
     )
-    def update_data_config(airport_lat, airport_lon, crs, aermod_crs, current_config):
-        """Update data configuration store when inputs change."""
-        config = current_config.copy() if current_config else {}
-        
-        if airport_lat is not None and airport_lon is not None:
-            config['airport_coordinates'] = (float(airport_lat), float(airport_lon))
-            airport_status = f"Airport coordinates: ({airport_lat}, {airport_lon})"
-        else:
-            config['airport_coordinates'] = None
-            airport_status = "Airport coordinates: Not set"
-        
-        if crs:
-            config['crs'] = crs
-            crs_status = f"CRS: {crs}"
-        else:
-            config['crs'] = 'EPSG:4326'
-            crs_status = "CRS: EPSG:4326 (default)"
-        
-        if aermod_crs:
-            config['aermod_crs'] = aermod_crs
-            aermod_status = f"AERMOD CRS: {aermod_crs}"
-        else:
-            config['aermod_crs'] = 'EPSG:32616'
-            aermod_status = "AERMOD CRS: EPSG:32616 (default)"
-        
-        status_text = f"{airport_status} | {crs_status} | {aermod_status}"
-        
-        return config, html.Small(status_text, className="text-muted")
+    def update_aermod_data_config(aermod_crs, current_config):
+        """Keep AERMOD grid CRS in the data store (used when generating exposure from .ADO files)."""
+        config = dict(current_config) if current_config else {}
+        text = (aermod_crs or "").strip()
+        config['aermod_crs'] = text if text else 'EPSG:4326'
+        hint = html.Small(f"Using {config['aermod_crs']} for AERMOD x/y coordinates.", className="text-muted")
+        return config, hint
     
     @app.callback(
         Output('case-study-dropdown', 'options'),
@@ -237,17 +238,15 @@ def register_callbacks(app):
             cached_center = None
             
             if workflow_instance is None:
-                config = {}
-                if data_config:
-                    if data_config.get('crs'):
-                        config['crs'] = data_config['crs']
-                    if data_config.get('airport_coordinates'):
-                        config['airport_coordinates'] = tuple(data_config['airport_coordinates'])
-                workflow_instance = Workflow(config)
+                workflow_instance = Workflow()
             
             # Use load_inputs for cleaner API
             if exposure_source == 'aermod':
-                aermod_crs = data_config.get('aermod_crs', 'EPSG:32616') if data_config else 'EPSG:32616'
+                aermod_crs = case_study.get('aermod_crs')
+                if not aermod_crs and data_config:
+                    aermod_crs = data_config.get('aermod_crs')
+                if not aermod_crs:
+                    aermod_crs = 'EPSG:4326'
                 exposure_data = {
                     'landing_files': resolved_paths['aermod']['landing'],
                     'takeoff_files': resolved_paths['aermod']['takeoff'],
@@ -332,11 +331,10 @@ def register_callbacks(app):
          Output('workflow-state', 'data', allow_duplicate=True)],
         Input('upload-tracts', 'contents'),
         [State('upload-tracts', 'filename'),
-         State('workflow-state', 'data'),
-         State('data-config', 'data')],
+         State('workflow-state', 'data')],
         prevent_initial_call=True
     )
-    def upload_tract_data(contents, filename, state, data_config):
+    def upload_tract_data(contents, filename, state):
         if contents is None:
             return "", state
         
@@ -357,17 +355,16 @@ def register_callbacks(app):
             cached_center = None
             
             if workflow_instance is None:
-                config = get_workflow_config(data_config)
-                workflow_instance = Workflow(config)
+                workflow_instance = Workflow()
             
-            # Load tract geometries (should only have GEOID and geometry)
+            # Load tract geometries (should only have GEOID and geometry); CRS comes from file metadata
             workflow_instance.data.load_tract_geometries(tracts_gdf)
             
             state['tracts_loaded'] = True
             state['n_tracts'] = len(tracts_gdf)
             
             status = dbc.Alert(
-                f"Successfully loaded {len(tracts_gdf)} census tracts",
+                f"Successfully loaded {len(tracts_gdf)} census tracts (CRS: {workflow_instance.data.crs})",
                 color="success",
                 className="mt-2"
             )
@@ -387,11 +384,10 @@ def register_callbacks(app):
          Output('workflow-state', 'data', allow_duplicate=True)],
         Input('upload-demographics', 'contents'),
         [State('upload-demographics', 'filename'),
-         State('workflow-state', 'data'),
-         State('data-config', 'data')],
+         State('workflow-state', 'data')],
         prevent_initial_call=True
     )
-    def upload_demographics_data(contents, filename, state, data_config):
+    def upload_demographics_data(contents, filename, state):
         if contents is None:
             return "", state
         
@@ -403,8 +399,7 @@ def register_callbacks(app):
             
             global workflow_instance
             if workflow_instance is None:
-                config = get_workflow_config(data_config)
-                workflow_instance = Workflow(config)
+                workflow_instance = Workflow()
             
             workflow_instance.data.load_demographics(demographics_df)
             
@@ -433,11 +428,10 @@ def register_callbacks(app):
         Input('upload-exposure', 'contents'),
         [State('upload-exposure', 'filename'),
          State('exposure-source-radio', 'value'),
-         State('workflow-state', 'data'),
-         State('data-config', 'data')],
+         State('workflow-state', 'data')],
         prevent_initial_call=True
     )
-    def upload_exposure_data(contents, filename, exposure_source, state, data_config):
+    def upload_exposure_data(contents, filename, exposure_source, state):
         if contents is None:
             return "", state
         
@@ -453,8 +447,7 @@ def register_callbacks(app):
             
             global workflow_instance
             if workflow_instance is None:
-                config = get_workflow_config(data_config)
-                workflow_instance = Workflow(config)
+                workflow_instance = Workflow()
             
             # Rename column if needed
             if 'pollutant_concentration' in exposure_df.columns:
@@ -492,11 +485,10 @@ def register_callbacks(app):
          Output('workflow-state', 'data', allow_duplicate=True)],
         Input('upload-mortality-incidence', 'contents'),
         [State('upload-mortality-incidence', 'filename'),
-         State('workflow-state', 'data'),
-         State('data-config', 'data')],
+         State('workflow-state', 'data')],
         prevent_initial_call=True
     )
-    def upload_mortality_incidence_data(contents, filename, state, data_config):
+    def upload_mortality_incidence_data(contents, filename, state):
         if contents is None:
             return "", state
         
@@ -508,8 +500,7 @@ def register_callbacks(app):
             
             global workflow_instance
             if workflow_instance is None:
-                config = get_workflow_config(data_config)
-                workflow_instance = Workflow(config)
+                workflow_instance = Workflow()
             
             if workflow_instance.data.tract_geometries is None:
                 raise ValueError("Tract geometries must be loaded first")
@@ -677,32 +668,34 @@ def register_callbacks(app):
     
     @app.callback(
         Output('mortality-function-checkboxes', 'children'),
-        Input('workflow-state', 'data'),
+        Input('selected-mortality-functions-store', 'data'),
         prevent_initial_call=False
     )
-    def create_mortality_function_checkboxes(state):
+    def create_mortality_function_checkboxes(selected):
         global mortality_library
-        
+
         if mortality_library is None:
             mortality_library = MortalityFunctionLibrary()
-        
+
         functions = mortality_library.list_functions()
-        
+
         if not functions:
             return html.Div("No mortality functions available", className="text-muted")
-        
+
+        selected_set = set(selected or [])
         checkboxes = []
         for func in functions:
             checkbox_id = {'type': 'mortality-function-checkbox', 'index': func['id']}
+            fid = func['id']
             checkboxes.append(
                 dbc.Checklist(
-                    options=[{'label': func['title'], 'value': func['id']}],
-                    value=[],
+                    options=[{'label': func['title'], 'value': fid}],
+                    value=[fid] if fid in selected_set else [],
                     id=checkbox_id,
                     className="mb-2"
                 )
             )
-        
+
         return html.Div(checkboxes)
     
     @app.callback(
@@ -773,9 +766,35 @@ def register_callbacks(app):
             return new_scenarios, html.Small("Scenario removed", className="text-success")
         
         if 'saf-scenario-input' in trigger_id:
-            if input_values:
-                valid_values = [v for v in input_values if v is not None and 0 <= v <= 50]
-                return valid_values, ""
+            if not input_values:
+                return current_scenarios or [25, 50], ""
+            base = list(current_scenarios) if current_scenarios else []
+            out = []
+            clamped = False
+            for i, v in enumerate(input_values):
+                prev = base[i] if i < len(base) else 0
+                if v is None:
+                    out.append(prev)
+                    continue
+                try:
+                    num = float(v)
+                except (TypeError, ValueError):
+                    out.append(prev)
+                    continue
+                if num < 0 or num > 50:
+                    clamped = True
+                    out.append(int(round(max(0, min(50, num)))))
+                else:
+                    out.append(int(round(num)))
+            msg = (
+                html.Small(
+                    "Scenarios must be between 0 and 50 (out-of-range values were adjusted).",
+                    className="text-warning",
+                )
+                if clamped
+                else ""
+            )
+            return out, msg
         
         return current_scenarios or [25, 50], ""
     
@@ -833,31 +852,22 @@ def register_callbacks(app):
     
     @app.callback(
         [Output('upload-ptb-status', 'children'),
-         Output('upload-ptb-status-config', 'children'),
          Output('workflow-state', 'data', allow_duplicate=True)],
-        [Input('upload-ptb-data', 'contents'),
-         Input('upload-ptb-data-config', 'contents')],
+        Input('upload-ptb-data', 'contents'),
         [State('upload-ptb-data', 'filename'),
-         State('upload-ptb-data-config', 'filename'),
          State('workflow-state', 'data')],
         prevent_initial_call=True
     )
-    def upload_preterm_birth_data(contents, contents_config, filename, filename_config, state):
-        tid = dash_ctx.triggered_id
-        if tid == 'upload-ptb-data-config':
-            contents, filename = contents_config, filename_config
-        elif tid != 'upload-ptb-data':
-            return dash.no_update, dash.no_update, dash.no_update
-
+    def upload_preterm_birth_data(contents, filename, state):
         if contents is None:
-            return "", "", state
+            return "", state
 
         try:
             global workflow_instance
 
             if workflow_instance is None:
                 msg = dbc.Alert("Workflow not initialized. Please load data first.", color="warning")
-                return msg, msg, state
+                return msg, state
 
             content_type, content_string = contents.split(',')
             decoded = base64.b64decode(content_string)
@@ -866,18 +876,18 @@ def register_callbacks(app):
                 ptb_df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
             else:
                 msg = dbc.Alert("Unsupported file format. Please upload a CSV file.", color="danger")
-                return msg, msg, state
+                return msg, state
 
             workflow_instance.data.load_preterm_birth_data(ptb_df)
 
             state['ptb_data_loaded'] = True
 
             status = html.Span(f"✓ Loaded {len(ptb_df)} records from {filename}", className="text-success")
-            return status, status, state
+            return status, state
 
         except Exception as e:
             status = html.Span(f"✗ Error loading file: {str(e)}", className="text-danger")
-            return status, status, state
+            return status, state
     
     @app.callback(
         Output('btn-run-analysis', 'disabled'),
@@ -1803,7 +1813,8 @@ def register_callbacks(app):
     
     @app.callback(
         [Output('upload-landing-aermod-status', 'children'),
-         Output('workflow-state', 'data', allow_duplicate=True)],
+         Output('workflow-state', 'data', allow_duplicate=True),
+         Output('landing-aermod-weights-table', 'children')],
         Input('upload-landing-aermod', 'contents'),
         State('upload-landing-aermod', 'filename'),
         State('workflow-state', 'data'),
@@ -1811,49 +1822,57 @@ def register_callbacks(app):
     )
     def upload_landing_aermod(contents_list, filename_list, state):
         if contents_list is None or len(contents_list) == 0:
-            return "", state
-        
+            if 'aermod_files' not in state:
+                state['aermod_files'] = {}
+            state['aermod_files']['landing'] = []
+            return (
+                "",
+                state,
+                html.Small("Upload landing .ADO files to assign a weight to each file.", className="text-muted"),
+            )
+
         try:
             if not isinstance(contents_list, list):
                 contents_list = [contents_list]
             if not isinstance(filename_list, list):
                 filename_list = [filename_list]
-            
+
             landing_files = []
             for contents, filename in zip(contents_list, filename_list):
                 content_type, content_string = contents.split(',')
                 decoded = base64.b64decode(content_string)
-                
-                # Save to temporary file
+
                 with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix) as tmp:
                     tmp.write(decoded)
                     tmp_path = tmp.name
-                
+
                 landing_files.append((tmp_path, filename))
-            
+
             if 'aermod_files' not in state:
                 state['aermod_files'] = {}
             state['aermod_files']['landing'] = landing_files
-            
+
+            names = [fn for _, fn in landing_files]
             status = dbc.Alert(
-                f"Successfully uploaded {len(landing_files)} landing AERMOD file(s)",
+                f"Uploaded {len(landing_files)} landing file(s). Set weights in the table, then generate exposure.",
                 color="success",
-                className="mt-2"
+                className="mt-2 py-2",
             )
-            
-            return status, state
-            
+
+            return status, state, _aermod_weight_table_ui(names, "landing-weight")
+
         except Exception as e:
             status = dbc.Alert(
                 f"Error uploading landing AERMOD files: {str(e)}",
                 color="danger",
                 className="mt-2"
             )
-            return status, state
+            return status, state, html.Small("Upload failed; try again.", className="text-danger small")
     
     @app.callback(
         [Output('upload-takeoff-aermod-status', 'children'),
-         Output('workflow-state', 'data', allow_duplicate=True)],
+         Output('workflow-state', 'data', allow_duplicate=True),
+         Output('takeoff-aermod-weights-table', 'children')],
         Input('upload-takeoff-aermod', 'contents'),
         State('upload-takeoff-aermod', 'filename'),
         State('workflow-state', 'data'),
@@ -1861,112 +1880,120 @@ def register_callbacks(app):
     )
     def upload_takeoff_aermod(contents_list, filename_list, state):
         if contents_list is None or len(contents_list) == 0:
-            return "", state
-        
+            if 'aermod_files' not in state:
+                state['aermod_files'] = {}
+            state['aermod_files']['takeoff'] = []
+            return (
+                "",
+                state,
+                html.Small("Upload takeoff .ADO files to assign a weight to each file.", className="text-muted"),
+            )
+
         try:
             if not isinstance(contents_list, list):
                 contents_list = [contents_list]
             if not isinstance(filename_list, list):
                 filename_list = [filename_list]
-            
+
             takeoff_files = []
             for contents, filename in zip(contents_list, filename_list):
                 content_type, content_string = contents.split(',')
                 decoded = base64.b64decode(content_string)
-                
-                # Save to temporary file
+
                 with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix) as tmp:
                     tmp.write(decoded)
                     tmp_path = tmp.name
-                
+
                 takeoff_files.append((tmp_path, filename))
-            
+
             if 'aermod_files' not in state:
                 state['aermod_files'] = {}
             state['aermod_files']['takeoff'] = takeoff_files
-            
+
+            names = [fn for _, fn in takeoff_files]
             status = dbc.Alert(
-                f"Successfully uploaded {len(takeoff_files)} takeoff AERMOD file(s)",
+                f"Uploaded {len(takeoff_files)} takeoff file(s). Set weights in the table, then generate exposure.",
                 color="success",
-                className="mt-2"
+                className="mt-2 py-2",
             )
-            
-            return status, state
-            
+
+            return status, state, _aermod_weight_table_ui(names, "takeoff-weight")
+
         except Exception as e:
             status = dbc.Alert(
                 f"Error uploading takeoff AERMOD files: {str(e)}",
                 color="danger",
                 className="mt-2"
             )
-            return status, state
+            return status, state, html.Small("Upload failed; try again.", className="text-danger small")
     
     @app.callback(
         [Output('generate-exposure-status', 'children'),
          Output('workflow-state', 'data', allow_duplicate=True)],
         Input('btn-generate-exposure', 'n_clicks'),
-        [State('workflow-state', 'data'),
-         State('landing-weights-input', 'value'),
-         State('takeoff-weights-input', 'value'),
-         State('data-config', 'data')],
+        [
+            State('workflow-state', 'data'),
+            State({'type': 'landing-weight', 'index': ALL}, 'value'),
+            State({'type': 'takeoff-weight', 'index': ALL}, 'value'),
+            State('data-config', 'data'),
+        ],
         prevent_initial_call=True
     )
-    def generate_exposure_from_aermod(n_clicks, state, landing_weights_str, takeoff_weights_str, data_config):
+    def generate_exposure_from_aermod(n_clicks, state, landing_weight_values, takeoff_weight_values, data_config):
         if n_clicks is None:
             return "", state
-        
+
+        def weights_from_inputs(raw_values, num_files):
+            if num_files == 0:
+                return []
+            if raw_values is None or len(raw_values) != num_files:
+                return [1.0 / num_files] * num_files
+            out = []
+            for v in raw_values:
+                if v is None or v == '':
+                    out.append(1.0 / num_files)
+                else:
+                    out.append(float(v))
+            return out
+
         try:
             global workflow_instance
-            
+
             if workflow_instance is None:
-                config = get_workflow_config(data_config)
-                workflow_instance = Workflow(config)
-            
+                workflow_instance = Workflow()
+
             if workflow_instance.data.tract_geometries is None:
                 raise ValueError("Tract geometries must be loaded first")
-            
-            # Get AERMOD files from state
+
             if 'aermod_files' not in state:
                 raise ValueError("Please upload AERMOD files first")
-            
+
             aermod_files = state['aermod_files']
-            
-            if 'landing' not in aermod_files or len(aermod_files['landing']) == 0:
-                raise ValueError("Please upload at least one landing AERMOD file")
-            
-            if 'takeoff' not in aermod_files or len(aermod_files['takeoff']) == 0:
-                raise ValueError("Please upload at least one takeoff AERMOD file")
-            
-            # Use default calibration file
+            landing_files = aermod_files.get('landing') or []
+            takeoff_files = aermod_files.get('takeoff') or []
+
+            if len(landing_files) == 0 and len(takeoff_files) == 0:
+                raise ValueError("Upload at least one landing or takeoff AERMOD file")
+
             project_root = Path(__file__).parent.parent.parent
             calibration_file = project_root / 'data' / 'aermod_calibration_coefficients.json'
-            
+
             if not calibration_file.exists():
                 raise FileNotFoundError(f"Default calibration file not found at {calibration_file}")
-            
-            # Parse weights
-            def parse_weights(weights_str, num_files):
-                if not weights_str or weights_str.strip() == '':
-                    # Default: equal weights
-                    return [1.0 / num_files] * num_files
-                
-                try:
-                    weights = [float(w.strip()) for w in weights_str.split(',')]
-                    if len(weights) != num_files:
-                        raise ValueError(f"Number of weights ({len(weights)}) must match number of files ({num_files})")
-                    return weights
-                except ValueError as e:
-                    raise ValueError(f"Invalid weights format: {str(e)}")
-            
-            landing_files = aermod_files['landing']
-            takeoff_files = aermod_files['takeoff']
-            
-            landing_weights = parse_weights(landing_weights_str, len(landing_files))
-            takeoff_weights = parse_weights(takeoff_weights_str, len(takeoff_files))
-            
-            # Create file + weight tuples
-            landing_file_tuples = [(path, weight) for (path, _), weight in zip(landing_files, landing_weights)]
-            takeoff_file_tuples = [(path, weight) for (path, _), weight in zip(takeoff_files, takeoff_weights)]
+
+            landing_weights = weights_from_inputs(landing_weight_values, len(landing_files))
+            takeoff_weights = weights_from_inputs(takeoff_weight_values, len(takeoff_files))
+
+            landing_file_tuples = (
+                [(path, weight) for (path, _), weight in zip(landing_files, landing_weights)]
+                if landing_files
+                else None
+            )
+            takeoff_file_tuples = (
+                [(path, weight) for (path, _), weight in zip(takeoff_files, takeoff_weights)]
+                if takeoff_files
+                else None
+            )
             
             # Generate exposure using load_inputs method
             if workflow_instance.data.tract_geometries is None:
@@ -1974,7 +2001,7 @@ def register_callbacks(app):
             
             from bensaf.exposure_generation import generate_exposure_from_aermod
             
-            aermod_crs = data_config.get('aermod_crs', 'EPSG:32616') if data_config else 'EPSG:32616'
+            aermod_crs = data_config.get('aermod_crs', 'EPSG:4326') if data_config else 'EPSG:4326'
             exposure_df = generate_exposure_from_aermod(
                 landing_files=landing_file_tuples,
                 takeoff_files=takeoff_file_tuples,

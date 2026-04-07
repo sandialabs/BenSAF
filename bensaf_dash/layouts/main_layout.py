@@ -34,7 +34,7 @@ def create_layout():
         dcc.Store(id='workflow-state', data={}),
         dcc.Store(id='analysis-results', data={}),
         dcc.Store(id='case-studies-init', data={'init': True}),
-        dcc.Store(id='data-config', data={'crs': 'EPSG:4326', 'aermod_crs': 'EPSG:32616', 'airport_coordinates': None}),
+        dcc.Store(id='data-config', data={'aermod_crs': 'EPSG:4326'}),
         
     ], fluid=True, className="py-4")
 
@@ -99,77 +99,21 @@ def create_header():
 
 
 def create_data_tab():
-    """Create data upload tab with collapsible sections"""
+    """Data tab: file upload vs example case study, accordion inputs, data explorer."""
     return dbc.Container([
         dbc.Row([
             dbc.Col([
-                html.H3("Data Upload", className="mt-4 mb-3"),
-                html.P("Configure your study area and upload data files or load example datasets.", className="text-muted"),
+                html.H3("Data", className="mt-4 mb-3"),
+                html.P(
+                    "Choose one of two ways to configure the analysis case study: upload your own inputs below, or load a prepared example case study.",
+                    className="text-muted",
+                ),
             ])
         ]),
         
         dbc.Row([
             dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H5("Study Area Configuration", className="mb-0")),
-                    dbc.CardBody([
-                        dbc.Row([
-                            dbc.Col([
-                                html.Label("Airport Coordinates", className="fw-bold"),
-                                html.Small("Optional: Latitude and longitude of the airport center", className="text-muted d-block mb-2"),
-                                dbc.Row([
-                                    dbc.Col([
-                                        dbc.Input(
-                                            id='input-airport-lat',
-                                            type='number',
-                                            placeholder='Latitude (e.g., 41.9786)',
-                                            step=0.0001,
-                                            className="mb-2"
-                                        ),
-                                    ], md=6),
-                                    dbc.Col([
-                                        dbc.Input(
-                                            id='input-airport-lon',
-                                            type='number',
-                                            placeholder='Longitude (e.g., -87.9048)',
-                                            step=0.0001,
-                                            className="mb-2"
-                                        ),
-                                    ], md=6),
-                                ]),
-                            ], md=4),
-                            dbc.Col([
-                                html.Label("Coordinate Reference System (CRS)", className="fw-bold"),
-                                html.Small("CRS for input data (e.g., EPSG:4326 for WGS84)", className="text-muted d-block mb-2"),
-                                dbc.Input(
-                                    id='input-crs',
-                                    type='text',
-                                    placeholder='EPSG:4326',
-                                    value='EPSG:4326',
-                                    className="mb-2"
-                                ),
-                            ], md=4),
-                            dbc.Col([
-                                html.Label("AERMOD CRS", className="fw-bold"),
-                                html.Small("CRS for AERMOD files (e.g., EPSG:32616 for UTM Zone 16N)", className="text-muted d-block mb-2"),
-                                dbc.Input(
-                                    id='input-aermod-crs',
-                                    type='text',
-                                    placeholder='EPSG:32616',
-                                    value='EPSG:32616',
-                                    className="mb-2"
-                                ),
-                            ], md=4),
-                        ]),
-                        html.Div(id='config-data-status', className="mt-2", style={"fontSize": "12px"}),
-                    ])
-                ], className="mb-4"),
-            ], md=12)
-        ]),
-        
-        dbc.Row([
-            dbc.Col([
-                html.H4("Data Upload", className="mb-3"),
+                html.H4("File Upload", className="mb-3"),
                 dbc.Accordion([
                     dbc.AccordionItem([
                         html.Label("Census Tract Geometries (GeoJSON, Shapefile, or GeoPackage)", className="fw-bold"),
@@ -255,77 +199,84 @@ def create_data_tab():
                         ]),
                         
                         html.Div(id='exposure-aermod-upload', style={'display': 'none'}, children=[
-                            dbc.Row([
-                                dbc.Col([
-                                    html.Label("Landing AERMOD Files", className="fw-bold mt-3"),
-                                    html.Small("Upload one or more AERMOD .ADO files for landing flows", className="text-muted d-block mb-1"),
-                                    dcc.Upload(
-                                        id='upload-landing-aermod',
-                                        children=html.Div([
-                                            'Drag and Drop or ',
-                                            html.A('Select Landing AERMOD Files')
-                                        ]),
-                                        style={
-                                            'width': '100%',
-                                            'height': '60px',
-                                            'lineHeight': '60px',
-                                            'borderWidth': '1px',
-                                            'borderStyle': 'dashed',
-                                            'borderRadius': '5px',
-                                            'textAlign': 'center',
-                                            'margin': '10px 0'
-                                        },
-                                        multiple=True
-                                    ),
-                                    html.Div(id='upload-landing-aermod-status', className="text-muted mb-3"),
-                                ], md=6),
-                                dbc.Col([
-                                    html.Label("Landing File Weights", className="fw-bold mt-3"),
-                                    html.Small("Enter weights for each landing file (comma-separated, e.g., 0.33, 0.67)", className="text-muted d-block mb-1"),
-                                    dbc.Input(
-                                        id='landing-weights-input',
-                                        type='text',
-                                        placeholder='0.33, 0.67',
-                                        className="mb-3"
-                                    ),
-                                ], md=6)
-                            ]),
+                            html.Label("AERMOD grid CRS", className="fw-bold"),
+                            html.Small(
+                                "Coordinate system for x/y values in the .ADO receptor grid (often a projected CRS in meters; set to match your run).",
+                                className="text-muted d-block mb-2",
+                            ),
+                            dbc.Input(
+                                id='input-aermod-crs',
+                                type='text',
+                                placeholder='EPSG:4326',
+                                value='EPSG:4326',
+                                className="mb-1",
+                            ),
+                            html.Div(id='aermod-crs-config-status', className="text-muted small mb-3"),
+                            html.P(
+                                "Provide landing .ADO files, takeoff .ADO files, or both. Each uploaded file gets its own weight in the tables below (defaults split weight equally). Only the phases you upload are used in the blend.",
+                                className="text-muted small mb-3"
+                            ),
+                            html.Label("Landing AERMOD files", className="fw-bold mt-2"),
+                            html.Small("Optional. One or more .ADO files with annual-average landing concentrations.", className="text-muted d-block mb-1"),
+                            dcc.Upload(
+                                id='upload-landing-aermod',
+                                children=html.Div([
+                                    'Drag and Drop or ',
+                                    html.A('Select Landing AERMOD Files')
+                                ]),
+                                style={
+                                    'width': '100%',
+                                    'height': '60px',
+                                    'lineHeight': '60px',
+                                    'borderWidth': '1px',
+                                    'borderStyle': 'dashed',
+                                    'borderRadius': '5px',
+                                    'textAlign': 'center',
+                                    'margin': '10px 0'
+                                },
+                                multiple=True
+                            ),
+                            html.Div(id='upload-landing-aermod-status', className="text-muted mb-2"),
+                            html.Label("Weight per landing file", className="fw-bold small"),
+                            html.Div(
+                                id='landing-aermod-weights-table',
+                                className="mb-4",
+                                children=html.Small(
+                                    "Upload landing .ADO files to assign a weight to each file.",
+                                    className="text-muted",
+                                ),
+                            ),
                             
-                            dbc.Row([
-                                dbc.Col([
-                                    html.Label("Takeoff AERMOD Files", className="fw-bold mt-3"),
-                                    html.Small("Upload one or more AERMOD .ADO files for takeoff flows", className="text-muted d-block mb-1"),
-                                    dcc.Upload(
-                                        id='upload-takeoff-aermod',
-                                        children=html.Div([
-                                            'Drag and Drop or ',
-                                            html.A('Select Takeoff AERMOD Files')
-                                        ]),
-                                        style={
-                                            'width': '100%',
-                                            'height': '60px',
-                                            'lineHeight': '60px',
-                                            'borderWidth': '1px',
-                                            'borderStyle': 'dashed',
-                                            'borderRadius': '5px',
-                                            'textAlign': 'center',
-                                            'margin': '10px 0'
-                                        },
-                                        multiple=True
-                                    ),
-                                    html.Div(id='upload-takeoff-aermod-status', className="text-muted mb-3"),
-                                ], md=6),
-                                dbc.Col([
-                                    html.Label("Takeoff File Weights", className="fw-bold mt-3"),
-                                    html.Small("Enter weights for each takeoff file (comma-separated, e.g., 0.33, 0.67)", className="text-muted d-block mb-1"),
-                                    dbc.Input(
-                                        id='takeoff-weights-input',
-                                        type='text',
-                                        placeholder='0.33, 0.67',
-                                        className="mb-3"
-                                    ),
-                                ], md=6)
-                            ]),
+                            html.Label("Takeoff AERMOD files", className="fw-bold mt-2"),
+                            html.Small("Optional. One or more .ADO files with annual-average takeoff concentrations.", className="text-muted d-block mb-1"),
+                            dcc.Upload(
+                                id='upload-takeoff-aermod',
+                                children=html.Div([
+                                    'Drag and Drop or ',
+                                    html.A('Select Takeoff AERMOD Files')
+                                ]),
+                                style={
+                                    'width': '100%',
+                                    'height': '60px',
+                                    'lineHeight': '60px',
+                                    'borderWidth': '1px',
+                                    'borderStyle': 'dashed',
+                                    'borderRadius': '5px',
+                                    'textAlign': 'center',
+                                    'margin': '10px 0'
+                                },
+                                multiple=True
+                            ),
+                            html.Div(id='upload-takeoff-aermod-status', className="text-muted mb-2"),
+                            html.Label("Weight per takeoff file", className="fw-bold small"),
+                            html.Div(
+                                id='takeoff-aermod-weights-table',
+                                className="mb-3",
+                                children=html.Small(
+                                    "Upload takeoff .ADO files to assign a weight to each file.",
+                                    className="text-muted",
+                                ),
+                            ),
                             
                             html.Small("Using default calibration coefficients from data/aermod_calibration_coefficients.json", className="text-muted d-block mb-3"),
                             
@@ -338,14 +289,120 @@ def create_data_tab():
                             html.Div(id='generate-exposure-status', className="mt-2"),
                         ]),
                     ], title="3. Exposure Data", item_id="item-exposure"),
+                    
+                    dbc.AccordionItem([
+                        html.P(
+                            "Select and configure health benefit pipelines. Each pipeline has specific data requirements.",
+                            className="text-muted mb-3",
+                        ),
+                        dbc.Card([
+                            dbc.CardHeader([
+                                html.Div([
+                                    html.H5("Mortality Pipeline", className="mb-0 d-inline"),
+                                    html.Span(id='mortality-pipeline-status', className="ms-2"),
+                                ])
+                            ]),
+                            dbc.CardBody([
+                                html.P(
+                                    "Computes mortality health impacts and economic benefits from pollutant reduction.",
+                                    className="text-muted mb-3",
+                                ),
+                                html.H6("Required Data", className="fw-bold mt-3 mb-2"),
+                                html.Ul([
+                                    html.Li("Incidence data with 'mortality_rate' column (CSV)"),
+                                    html.Li("Demographics data with 'population' column (already uploaded)"),
+                                ], className="mb-3"),
+                                html.H6("Configuration", className="fw-bold mt-3 mb-2"),
+                                html.Ul([
+                                    html.Li("Mortality function: Selected in Configuration tab"),
+                                    html.Li("Economic parameters: Configured in data/economic_parameters.json"),
+                                ], className="mb-3"),
+                                html.Label("Upload Incidence Data (CSV)", className="fw-bold"),
+                                html.Small(
+                                    "Must contain GEOID and mortality_rate columns",
+                                    className="text-muted d-block mb-2",
+                                ),
+                                dcc.Upload(
+                                    id='upload-mortality-incidence',
+                                    children=html.Div([
+                                        'Drag and Drop or ',
+                                        html.A('Select Incidence Data File'),
+                                    ]),
+                                    style={
+                                        'width': '100%',
+                                        'height': '60px',
+                                        'lineHeight': '60px',
+                                        'borderWidth': '1px',
+                                        'borderStyle': 'dashed',
+                                        'borderRadius': '5px',
+                                        'textAlign': 'center',
+                                        'margin': '10px 0',
+                                    },
+                                    multiple=False,
+                                ),
+                                html.Div(id='upload-mortality-incidence-status', className="text-muted mt-2"),
+                            ]),
+                        ], className="mb-3"),
+                        dbc.Card([
+                            dbc.CardHeader([
+                                html.Div([
+                                    html.H5("Preterm Birth Pipeline", className="mb-0 d-inline"),
+                                    html.Span(id='preterm-birth-pipeline-status', className="ms-2"),
+                                ])
+                            ]),
+                            dbc.CardBody([
+                                html.P(
+                                    "Computes reduction in preterm births and economic benefits from UFP reduction.",
+                                    className="text-muted mb-3",
+                                ),
+                                html.H6("Required Data", className="fw-bold mt-3 mb-2"),
+                                html.Ul([
+                                    html.Li("Preterm birth data with 'baseline_preterm_births' column (CSV)"),
+                                    html.Li("Demographics data with 'population' column (already uploaded)"),
+                                ], className="mb-3"),
+                                html.H6("Configuration", className="fw-bold mt-3 mb-2"),
+                                html.Ul([
+                                    html.Li("Odds ratio: Configured in data/economic_parameters.json"),
+                                    html.Li("Monetary value per PtB: Configured in data/economic_parameters.json"),
+                                ], className="mb-3"),
+                                html.Label("Upload Preterm Birth Data (CSV)", className="fw-bold"),
+                                html.Small(
+                                    "Must contain GEOID and baseline_preterm_births columns",
+                                    className="text-muted d-block mb-2",
+                                ),
+                                dcc.Upload(
+                                    id='upload-ptb-data',
+                                    children=html.Div([
+                                        'Drag and Drop or ',
+                                        html.A('Select Preterm Birth Data File'),
+                                    ]),
+                                    style={
+                                        'width': '100%',
+                                        'height': '60px',
+                                        'lineHeight': '60px',
+                                        'borderWidth': '1px',
+                                        'borderStyle': 'dashed',
+                                        'borderRadius': '5px',
+                                        'textAlign': 'center',
+                                        'margin': '10px 0',
+                                    },
+                                    multiple=False,
+                                ),
+                                html.Div(id='upload-ptb-status', className="text-muted mt-2"),
+                            ]),
+                        ], className="mb-0"),
+                    ], title="4. Health Pipelines", item_id="item-health-pipelines"),
                 ], start_collapsed=False),
             ], md=6),
             
             dbc.Col([
-                html.H4("Load Example Data", className="mb-3"),
+                html.H4("Load Example Case Study", className="mb-3"),
                 dbc.Card([
                     dbc.CardBody([
-                        html.P("Select a case study to load example data", className="text-muted mb-3"),
+                        html.P(
+                            "Pick a packaged example and load all inputs at once (same analysis case study as a full file upload).",
+                            className="text-muted mb-3",
+                        ),
                         dcc.Dropdown(
                             id='case-study-dropdown',
                             options=[],
@@ -365,113 +422,6 @@ def create_data_tab():
                         html.Div(id='example-load-status', className="mt-3")
                     ])
                 ]),
-            ], md=6),
-        ]),
-        
-        html.Hr(className="my-4"),
-        
-        dbc.Row([
-            dbc.Col([
-                html.H4("Health Pipelines", className="mt-4 mb-3"),
-                html.P("Select and configure health benefit pipelines. Each pipeline has specific data requirements.", className="text-muted mb-3"),
-            ], md=12)
-        ]),
-        
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader([
-                        html.Div([
-                            html.H5("Mortality Pipeline", className="mb-0 d-inline"),
-                            html.Span(id='mortality-pipeline-status', className="ms-2")
-                        ])
-                    ]),
-                    dbc.CardBody([
-                        html.P("Computes mortality health impacts and economic benefits from pollutant reduction.", className="text-muted mb-3"),
-                        
-                        html.H6("Required Data", className="fw-bold mt-3 mb-2"),
-                        html.Ul([
-                            html.Li("Incidence data with 'mortality_rate' column (CSV)"),
-                            html.Li("Demographics data with 'population' column (already uploaded)"),
-                        ], className="mb-3"),
-                        
-                        html.H6("Configuration", className="fw-bold mt-3 mb-2"),
-                        html.Ul([
-                            html.Li("Mortality function: Selected in Configuration tab"),
-                            html.Li("Economic parameters: Configured in data/economic_parameters.json"),
-                        ], className="mb-3"),
-                        
-                        html.Label("Upload Incidence Data (CSV)", className="fw-bold"),
-                        html.Small("Must contain GEOID and mortality_rate columns", className="text-muted d-block mb-2"),
-                        dcc.Upload(
-                            id='upload-mortality-incidence',
-                            children=html.Div([
-                                'Drag and Drop or ',
-                                html.A('Select Incidence Data File')
-                            ]),
-                            style={
-                                'width': '100%',
-                                'height': '60px',
-                                'lineHeight': '60px',
-                                'borderWidth': '1px',
-                                'borderStyle': 'dashed',
-                                'borderRadius': '5px',
-                                'textAlign': 'center',
-                                'margin': '10px 0'
-                            },
-                            multiple=False
-                        ),
-                        html.Div(id='upload-mortality-incidence-status', className="text-muted mt-2"),
-                    ])
-                ], className="mb-3"),
-            ], md=6),
-            
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader([
-                        html.Div([
-                            html.H5("Preterm Birth Pipeline", className="mb-0 d-inline"),
-                            html.Span(id='preterm-birth-pipeline-status', className="ms-2")
-                        ])
-                    ]),
-                    dbc.CardBody([
-                        html.P("Computes reduction in preterm births and economic benefits from UFP reduction.", className="text-muted mb-3"),
-                        
-                        html.H6("Required Data", className="fw-bold mt-3 mb-2"),
-                        html.Ul([
-                            html.Li("Preterm birth data with 'baseline_preterm_births' column (CSV)"),
-                            html.Li("Demographics data with 'population' column (already uploaded)"),
-                        ], className="mb-3"),
-                        
-                        html.H6("Configuration", className="fw-bold mt-3 mb-2"),
-                        html.Ul([
-                            html.Li("Odds ratio: Configured in data/economic_parameters.json"),
-                            html.Li("Monetary value per PtB: Configured in data/economic_parameters.json"),
-                        ], className="mb-3"),
-                        
-                        html.Label("Upload Preterm Birth Data (CSV)", className="fw-bold"),
-                        html.Small("Must contain GEOID and baseline_preterm_births columns", className="text-muted d-block mb-2"),
-                        dcc.Upload(
-                            id='upload-ptb-data',
-                            children=html.Div([
-                                'Drag and Drop or ',
-                                html.A('Select Preterm Birth Data File')
-                            ]),
-                            style={
-                                'width': '100%',
-                                'height': '60px',
-                                'lineHeight': '60px',
-                                'borderWidth': '1px',
-                                'borderStyle': 'dashed',
-                                'borderRadius': '5px',
-                                'textAlign': 'center',
-                                'margin': '10px 0'
-                            },
-                            multiple=False
-                        ),
-                        html.Div(id='upload-ptb-status', className="text-muted mt-2"),
-                    ])
-                ], className="mb-3"),
             ], md=6),
         ]),
         
@@ -594,34 +544,6 @@ def create_configuration_tab():
                         html.Div(id='saf-scenarios-status', className="mt-2")
                     ])
                 ], className="mb-4"),
-                
-                dbc.Card([
-                    dbc.CardHeader(html.H5("Preterm Birth Data (Optional)", className="mb-0")),
-                    dbc.CardBody([
-                        html.P("Upload preterm birth data to enable preterm birth benefit calculations. Economic parameters are configured in data/economic_parameters.json", className="text-muted small mb-3"),
-                        html.Label("Upload Preterm Birth Data", className="fw-bold"),
-                        dcc.Upload(
-                            id='upload-ptb-data-config',
-                            children=html.Div([
-                                'Drag and Drop or ',
-                                html.A('Select PtB Data File')
-                            ]),
-                            style={
-                                'width': '100%',
-                                'height': '40px',
-                                'lineHeight': '40px',
-                                'borderWidth': '1px',
-                                'borderStyle': 'dashed',
-                                'borderRadius': '5px',
-                                'textAlign': 'center',
-                                'margin': '10px 0',
-                                'fontSize': '12px'
-                            },
-                            multiple=False
-                        ),
-                        html.Div(id='upload-ptb-status-config', className="text-muted mt-1", style={"fontSize": "11px"}),
-                    ])
-                ]),
             ], md=6),
             dbc.Col([
                 dcc.Graph(

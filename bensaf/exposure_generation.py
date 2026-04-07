@@ -305,6 +305,25 @@ def idw_interpolation(source_points: np.ndarray,
     return interpolated
 
 
+def _metric_crs_pair(receptor_gdf: gpd.GeoDataFrame, tract_geometries: gpd.GeoSeries):
+    """
+    If CRS is geographic, project receptors and tract geometries to estimated UTM for
+    centroid and distance-based steps (avoids GeoPandas centroid warnings and degree-based IDW).
+    """
+    crs = receptor_gdf.crs
+    if crs is None or not crs.is_geographic:
+        return receptor_gdf, tract_geometries
+    combined = gpd.GeoSeries(
+        pd.concat([receptor_gdf.geometry, tract_geometries], ignore_index=True),
+        crs=crs,
+    )
+    try:
+        proj = combined.estimate_utm_crs()
+    except (RuntimeError, IndexError, ValueError):
+        proj = "EPSG:3857"
+    return receptor_gdf.to_crs(proj), tract_geometries.to_crs(proj)
+
+
 def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
                        value_column: str,
                        tracts_gdf: gpd.GeoDataFrame,
@@ -362,11 +381,11 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
         
         if len(tracts_without_data) > 0:
             # Step 3: Use IDW interpolation for tracts without direct intersections
-            receptor_coords = np.array([[g.x, g.y] for g in receptor_gdf.geometry])
+            rec_m, twd_m = _metric_crs_pair(receptor_gdf, tracts_without_data.geometry)
+            receptor_coords = np.array([[g.x, g.y] for g in rec_m.geometry])
             receptor_values = receptor_gdf[value_column].values
-            
-            # Get centroids of tracts without data
-            tract_centroids = tracts_without_data.geometry.centroid
+
+            tract_centroids = twd_m.centroid
             target_coords = np.array([[g.x, g.y] for g in tract_centroids])
             
             # Perform IDW interpolation
@@ -403,10 +422,12 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
     
     elif method == 'idw_interpolation':
         # Pure IDW interpolation to all tract centroids
-        receptor_coords = np.array([[g.x, g.y] for g in receptor_gdf.geometry])
+        tract_geom = tracts_gdf.geometry
+        rec_m, tract_m = _metric_crs_pair(receptor_gdf, tract_geom)
+        receptor_coords = np.array([[g.x, g.y] for g in rec_m.geometry])
         receptor_values = receptor_gdf[value_column].values
-        
-        tract_centroids = tracts_gdf.geometry.centroid
+
+        tract_centroids = tract_m.centroid
         target_coords = np.array([[g.x, g.y] for g in tract_centroids])
         
         interpolated_values = idw_interpolation(
