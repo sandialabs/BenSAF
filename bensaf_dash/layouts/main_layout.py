@@ -601,7 +601,7 @@ def create_configuration_tab():
                         html.P("Upload preterm birth data to enable preterm birth benefit calculations. Economic parameters are configured in data/economic_parameters.json", className="text-muted small mb-3"),
                         html.Label("Upload Preterm Birth Data", className="fw-bold"),
                         dcc.Upload(
-                            id='upload-ptb-data',
+                            id='upload-ptb-data-config',
                             children=html.Div([
                                 'Drag and Drop or ',
                                 html.A('Select PtB Data File')
@@ -619,7 +619,7 @@ def create_configuration_tab():
                             },
                             multiple=False
                         ),
-                        html.Div(id='upload-ptb-status', className="text-muted mt-1", style={"fontSize": "11px"}),
+                        html.Div(id='upload-ptb-status-config', className="text-muted mt-1", style={"fontSize": "11px"}),
                     ])
                 ]),
             ], md=6),

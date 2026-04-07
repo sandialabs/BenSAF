@@ -833,41 +833,51 @@ def register_callbacks(app):
     
     @app.callback(
         [Output('upload-ptb-status', 'children'),
+         Output('upload-ptb-status-config', 'children'),
          Output('workflow-state', 'data', allow_duplicate=True)],
-        Input('upload-ptb-data', 'contents'),
-        State('upload-ptb-data', 'filename'),
-        State('workflow-state', 'data'),
+        [Input('upload-ptb-data', 'contents'),
+         Input('upload-ptb-data-config', 'contents')],
+        [State('upload-ptb-data', 'filename'),
+         State('upload-ptb-data-config', 'filename'),
+         State('workflow-state', 'data')],
         prevent_initial_call=True
     )
-    def upload_preterm_birth_data(contents, filename, state):
+    def upload_preterm_birth_data(contents, contents_config, filename, filename_config, state):
+        tid = dash_ctx.triggered_id
+        if tid == 'upload-ptb-data-config':
+            contents, filename = contents_config, filename_config
+        elif tid != 'upload-ptb-data':
+            return dash.no_update, dash.no_update, dash.no_update
+
         if contents is None:
-            return "", state
-        
+            return "", "", state
+
         try:
             global workflow_instance
-            
+
             if workflow_instance is None:
-                return dbc.Alert("Workflow not initialized. Please load data first.", color="warning"), state
-            
+                msg = dbc.Alert("Workflow not initialized. Please load data first.", color="warning")
+                return msg, msg, state
+
             content_type, content_string = contents.split(',')
             decoded = base64.b64decode(content_string)
-            
+
             if filename.endswith('.csv'):
                 ptb_df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
             else:
-                return dbc.Alert("Unsupported file format. Please upload a CSV file.", color="danger"), state
-            
-            # Load preterm birth data
+                msg = dbc.Alert("Unsupported file format. Please upload a CSV file.", color="danger")
+                return msg, msg, state
+
             workflow_instance.data.load_preterm_birth_data(ptb_df)
-            
+
             state['ptb_data_loaded'] = True
-            
+
             status = html.Span(f"✓ Loaded {len(ptb_df)} records from {filename}", className="text-success")
-            return status, state
-            
+            return status, status, state
+
         except Exception as e:
             status = html.Span(f"✗ Error loading file: {str(e)}", className="text-danger")
-            return status, state
+            return status, status, state
     
     @app.callback(
         Output('btn-run-analysis', 'disabled'),
