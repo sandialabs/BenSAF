@@ -147,14 +147,14 @@ class AnalysisInputs:
 
         tracts_gdf = tracts_gdf.copy()
         tracts_gdf['GEOID'] = tracts_gdf['GEOID'].astype(int)
-
+        
+        # Use CRS from file metadata; do not reproject to a separate dashboard CRS
         if tracts_gdf.crs is None:
-            self.logger.warning("Tract data has no CRS defined, assuming EPSG:4326")
-            tracts_gdf.set_crs(self.crs, inplace=True)
-        elif tracts_gdf.crs != self.crs:
-            self.logger.info(f"Reprojecting tract data from {tracts_gdf.crs} to {self.crs}")
-            tracts_gdf = tracts_gdf.to_crs(self.crs)
-
+            self.logger.warning("Tract data has no CRS in file metadata; assuming EPSG:4326")
+            tracts_gdf.set_crs("EPSG:4326", inplace=True)
+        self.crs = str(tracts_gdf.crs)
+        
+        # Set GEOID as index and keep only geometry
         self.tract_geometries = tracts_gdf[['GEOID', 'geometry']].set_index('GEOID')
         self.logger.info(f"Loaded {len(self.tract_geometries)} census tract geometries")
 
