@@ -32,6 +32,22 @@ cached_geojson = None
 cached_center = None
 mortality_library = None
 
+def _numeric_saf_scenarios(scenarios, default=(25, 50)):
+    """Valid integers 0–50 for workflow/plots; None or invalid entries are dropped."""
+    if not scenarios:
+        return list(default)
+    out = []
+    for s in scenarios:
+        if s is None:
+            continue
+        try:
+            n = int(round(float(s)))
+        except (TypeError, ValueError):
+            continue
+        out.append(max(0, min(50, n)))
+    return out if out else list(default)
+
+
 def load_saf_blend_parameters():
     """Load SAF blend parameters from JSON file."""
     project_root = Path(__file__).parent.parent.parent
@@ -726,8 +742,8 @@ def register_callbacks(app):
                             type='number',
                             value=scenario,
                             min=0,
-                            max=50,
                             step=1,
+                            debounce=True,
                             className="mb-2"
                         ),
                     ], md=10),
@@ -766,7 +782,6 @@ def register_callbacks(app):
             return new_scenarios, html.Small("Scenario added", className="text-success")
         
         if 'saf-scenario-remove' in trigger_id:
-            import json
             trigger_data = json.loads(trigger_id.split('.')[0])
             index = trigger_data['index']
             new_scenarios = current_scenarios.copy() if current_scenarios else [25, 50]
@@ -777,24 +792,20 @@ def register_callbacks(app):
         if 'saf-scenario-input' in trigger_id:
             if not input_values:
                 return current_scenarios or [25, 50], ""
-            base = list(current_scenarios) if current_scenarios else []
             out = []
             clamped = False
-            for i, v in enumerate(input_values):
-                prev = base[i] if i < len(base) else 0
-                if v is None:
-                    out.append(prev)
+            for v in input_values:
+                if v is None or v == '':
+                    out.append(None)
                     continue
                 try:
                     num = float(v)
                 except (TypeError, ValueError):
-                    out.append(prev)
+                    out.append(None)
                     continue
                 if num < 0 or num > 50:
                     clamped = True
-                    out.append(int(round(max(0, min(50, num)))))
-                else:
-                    out.append(int(round(num)))
+                out.append(int(round(max(0, min(50, num)))))
             msg = (
                 html.Small(
                     "Scenarios must be between 0 and 50 (out-of-range values were adjusted).",
@@ -931,7 +942,8 @@ def register_callbacks(app):
             if workflow_instance is None:
                 raise ValueError("Workflow not initialized. Please load data first.")
             
-            scenarios = scenarios_store if scenarios_store else state.get('scenarios', [25, 50])
+            raw_scenarios = scenarios_store if scenarios_store else state.get('scenarios', [25, 50])
+            scenarios = _numeric_saf_scenarios(raw_scenarios)
             
             # Update config with scenarios
             workflow_instance.config.saf_scenarios = scenarios
@@ -1711,7 +1723,7 @@ def register_callbacks(app):
             line=dict(color='blue', width=3)
         ))
         
-        scenarios_list = scenarios if scenarios else [25, 50]
+        scenarios_list = _numeric_saf_scenarios(scenarios)
         scenario_reductions = [
             max(-100.0, min(0.0, sum(coeff * (s ** i) for i, coeff in enumerate(coeffs)) * 100))
             for s in scenarios_list
@@ -2212,7 +2224,10 @@ def register_callbacks(app):
                 dbc.CardBody([
                     html.H6("Configuration", className="card-title"),
                     html.P("✓ Configured", className="mb-1 text-success"),
-                    html.Small(f"Scenarios: {', '.join([f'{s}%' for s in scenarios])}", className="text-muted")
+                    html.Small(
+                        f"Scenarios: {', '.join([f'{s}%' for s in scenarios if s is not None])}",
+                        className="text-muted",
+                    )
                 ])
             ], color="success")
         else:
