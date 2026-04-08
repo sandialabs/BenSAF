@@ -1,0 +1,4 @@
+{
+  "polynomial_coefficients": [0.0, -0.0152, 0.00009],
+  "description": "Polynomial coefficients for SAF to pollutant reduction: Reduction = a₀ + a₁·SAF + a₂·SAF²"
+}

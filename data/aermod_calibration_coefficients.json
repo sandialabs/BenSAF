@@ -1,0 +1,13 @@
+{
+  "intercept": 6.450745097761753,
+  "coef_landing": 0.23127984693080483,
+  "coef_takeoff": 0.8154590173808101,
+  "source": "SEA-TAC calibration model",
+  "model_file": "sources/magali_seatac/data/aermod_calibration_lm.rda",
+  "model_object_name": "lm1",
+  "raw_coefficients": {
+    "(Intercept)": 6.450745097761753,
+    "aermod_landing": 0.23127984693080483,
+    "aermod_takeoff": 0.8154590173808101
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "0": {
+    "title": "Bouma et al. Default",
+    "mean_rr": 1.012,
+    "lower_rr": 1.010,
+    "upper_rr": 1.015,
+    "unit_increase": 2723.0
+  }
+}
