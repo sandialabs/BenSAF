@@ -18,8 +18,14 @@ from dash import callback, Input, Output, State, html, ALL, ctx as dash_ctx
 import dash_bootstrap_components as dbc
 import dash
 
+from bensaf.data_model import AnalysisResults
 from bensaf.workflow import Workflow
 from bensaf.mortality_functions import MortalityFunctionLibrary
+
+
+def _inputs_core_merged_gdf(workflow):
+    """Tract geometry plus core input layers only (no scenario columns)."""
+    return AnalysisResults(workflow.inputs).get_merged_data(core_only=True)
 
 workflow_instance = None
 cached_geojson = None
@@ -273,7 +279,7 @@ def register_callbacks(app):
                 pollutant_name='ufp'
             )
             
-            n_exposure = len(workflow_instance.data.baseline_exposure)
+            n_exposure = len(workflow_instance.inputs.baseline_exposure)
             
             state['tracts_loaded'] = True
             state['n_tracts'] = len(tracts_gdf)
@@ -358,13 +364,13 @@ def register_callbacks(app):
                 workflow_instance = Workflow()
             
             # Load tract geometries (should only have GEOID and geometry); CRS comes from file metadata
-            workflow_instance.data.load_tract_geometries(tracts_gdf)
+            workflow_instance.inputs.load_tract_geometries(tracts_gdf)
             
             state['tracts_loaded'] = True
             state['n_tracts'] = len(tracts_gdf)
             
             status = dbc.Alert(
-                f"Successfully loaded {len(tracts_gdf)} census tracts (CRS: {workflow_instance.data.crs})",
+                f"Successfully loaded {len(tracts_gdf)} census tracts (CRS: {workflow_instance.inputs.crs})",
                 color="success",
                 className="mt-2"
             )
@@ -401,7 +407,7 @@ def register_callbacks(app):
             if workflow_instance is None:
                 workflow_instance = Workflow()
             
-            workflow_instance.data.load_demographics(demographics_df)
+            workflow_instance.inputs.load_demographics(demographics_df)
             
             state['demographics_loaded'] = True
             state['n_demographics'] = len(demographics_df)
@@ -455,10 +461,10 @@ def register_callbacks(app):
             elif 'baseline_pollutant_concentration' in exposure_df.columns:
                 exposure_df = exposure_df.rename(columns={'baseline_pollutant_concentration': 'ufp'})
             
-            if workflow_instance.data.tract_geometries is None:
+            if workflow_instance.inputs.tract_geometries is None:
                 raise ValueError("Tract geometries must be loaded first")
             
-            workflow_instance.data.load_baseline_exposure(exposure_df, pollutant_columns=['ufp'])
+            workflow_instance.inputs.load_baseline_exposure(exposure_df, pollutant_columns=['ufp'])
             
             state['exposure_loaded'] = True
             state['n_exposure'] = len(exposure_df)
@@ -502,10 +508,10 @@ def register_callbacks(app):
             if workflow_instance is None:
                 workflow_instance = Workflow()
             
-            if workflow_instance.data.tract_geometries is None:
+            if workflow_instance.inputs.tract_geometries is None:
                 raise ValueError("Tract geometries must be loaded first")
             
-            workflow_instance.data.load_incidence_data(incidence_df, endpoint_columns=['mortality_rate'])
+            workflow_instance.inputs.load_incidence_data(incidence_df, endpoint_columns=['mortality_rate'])
             
             state['mortality_loaded'] = True
             state['n_mortality'] = len(incidence_df)
@@ -825,18 +831,10 @@ def register_callbacks(app):
         global workflow_instance
         
         if workflow_instance is not None:
-            # SAF polynomial coefficients are now loaded from JSON in the workflow
-            
-            # Set health endpoints for selected mortality functions
             global mortality_library
             if mortality_library is None:
                 mortality_library = MortalityFunctionLibrary()
-            
-            # Clear existing health endpoints
-            workflow_instance.config.health_endpoints = []
-            # Health endpoints are now loaded by pipelines from JSON
-            # No need to configure them here
-        
+
         state['config_set'] = True
         state['config_explicitly_set'] = True
         state['scenarios'] = scenarios if scenarios else [25, 50]
@@ -878,7 +876,7 @@ def register_callbacks(app):
                 msg = dbc.Alert("Unsupported file format. Please upload a CSV file.", color="danger")
                 return msg, state
 
-            workflow_instance.data.load_preterm_birth_data(ptb_df)
+            workflow_instance.inputs.load_preterm_birth_data(ptb_df)
 
             state['ptb_data_loaded'] = True
 
@@ -935,59 +933,59 @@ def register_callbacks(app):
             # Update config with scenarios
             workflow_instance.config.saf_scenarios = scenarios
             
-            # Run scenarios (this replaces apply_control_scenarios + calculate_health_impacts)
-            aggregated_results = workflow_instance.run_scenarios(scenarios=scenarios, pollutant_name='ufp')
-            
+            analysis_results = workflow_instance.run_scenarios(scenarios=scenarios, pollutant_name='ufp')
+
+            pop_series = None
+            dc = workflow_instance.inputs.demographics_core
+            if dc is not None and 'population' in dc.columns:
+                pop_series = dc['population']
+
             results = {}
             for scenario in scenarios:
                 scenario_id = int(scenario)
-                
-                if scenario_id in aggregated_results:
-                    scenario_agg = aggregated_results[scenario_id]
-                    scenario_result = workflow_instance.data.scenario_results[scenario_id]
-                    
-                    # Get mortality endpoint results
-                    if 'mortality' in scenario_agg:
-                        mortality_agg = scenario_agg['mortality']
-                        total_cases = mortality_agg['total_attributable_cases']['mean']
-                        lower_cases = mortality_agg['total_attributable_cases']['lower']
-                        upper_cases = mortality_agg['total_attributable_cases']['upper']
-                    else:
-                        # Fallback if mortality endpoint not found
-                        total_cases = 0.0
-                        lower_cases = 0.0
-                        upper_cases = 0.0
-                    
-                    pollutant_reduction = scenario_result.pollutant_reduction
-                    
-                    result_dict = {
-                        'scenario': scenario,
-                        'saf_percentage': scenario,
-                        'pollutant_reduction': float(pollutant_reduction),
-                        'total_cases': float(total_cases),
-                        'lower_cases': float(lower_cases),
-                        'upper_cases': float(upper_cases)
-                    }
-                    
-                    # Add economic benefits if available
-                    if 'economic_benefits' in scenario_agg:
-                        econ_agg = scenario_agg['economic_benefits']
-                        if 'mortality_economic_value' in econ_agg:
-                            result_dict['mortality_economic_value'] = float(econ_agg['mortality_economic_value']['mean'])
-                            result_dict['mortality_economic_value_lower'] = float(econ_agg['mortality_economic_value']['lower'])
-                            result_dict['mortality_economic_value_upper'] = float(econ_agg['mortality_economic_value']['upper'])
-                        
-                        if 'preterm_birth_economic_value' in econ_agg:
-                            result_dict['ptb_economic_value'] = float(econ_agg['preterm_birth_economic_value']['mean'])
-                            result_dict['ptb_economic_value_lower'] = float(econ_agg['preterm_birth_economic_value']['lower'])
-                            result_dict['ptb_economic_value_upper'] = float(econ_agg['preterm_birth_economic_value']['upper'])
-                        
-                        if 'total_economic_benefits' in econ_agg:
-                            result_dict['total_economic_benefits'] = float(econ_agg['total_economic_benefits']['mean'])
-                            result_dict['total_economic_benefits_lower'] = float(econ_agg['total_economic_benefits']['lower'])
-                            result_dict['total_economic_benefits_upper'] = float(econ_agg['total_economic_benefits']['upper'])
-                    
-                    results[str(scenario)] = result_dict
+                sr = analysis_results.scenarios.get(scenario_id)
+                if sr is None:
+                    continue
+
+                scenario_agg = sr.get_aggregated_results(population=pop_series)
+
+                if 'mortality' in scenario_agg:
+                    mortality_agg = scenario_agg['mortality']
+                    tac = mortality_agg['total_attributable_cases']
+                    total_cases = tac.mean
+                    lower_cases = tac.lower
+                    upper_cases = tac.upper
+                else:
+                    total_cases = 0.0
+                    lower_cases = 0.0
+                    upper_cases = 0.0
+
+                pollutant_reduction = sr.pollutant_reduction
+
+                result_dict = {
+                    'scenario': scenario,
+                    'saf_percentage': scenario,
+                    'pollutant_reduction': float(pollutant_reduction),
+                    'total_cases': float(total_cases),
+                    'lower_cases': float(lower_cases),
+                    'upper_cases': float(upper_cases),
+                }
+
+                if 'economic_benefits' in scenario_agg:
+                    econ_agg = scenario_agg['economic_benefits']
+                    if 'mortality_economic_value' in econ_agg:
+                        ev = econ_agg['mortality_economic_value']
+                        result_dict['mortality_economic_value'] = float(ev.mean)
+                        result_dict['mortality_economic_value_lower'] = float(ev.lower)
+                        result_dict['mortality_economic_value_upper'] = float(ev.upper)
+
+                    if 'preterm_birth_economic_value' in econ_agg:
+                        ev = econ_agg['preterm_birth_economic_value']
+                        result_dict['ptb_economic_value'] = float(ev.mean)
+                        result_dict['ptb_economic_value_lower'] = float(ev.lower)
+                        result_dict['ptb_economic_value_upper'] = float(ev.upper)
+
+                results[str(scenario)] = result_dict
             
             status = html.Div([
                 html.Span("✓ Analysis Complete! ", className="text-success fw-bold"),
@@ -1204,15 +1202,17 @@ def register_callbacks(app):
         ]
         
         # Add economic benefit options if available
-        if workflow_instance is not None and workflow_instance.data.scenario_results:
+        if workflow_instance is not None and workflow_instance.results:
+            scenarios_map = workflow_instance.results.scenarios
             scenario_id = int(selected_scenario)
-            if scenario_id in workflow_instance.data.scenario_results:
-                scenario_result = workflow_instance.data.scenario_results[scenario_id]
-                if 'mortality_economic_value_mean' in scenario_result.economic_benefits:
+            if scenario_id in scenarios_map:
+                scenario_result = scenarios_map[scenario_id]
+                econ_names = {b.name for b in scenario_result.economic_benefits}
+                if 'mortality_economic_value' in econ_names:
                     options.append({'label': 'Mortality Economic Value ($)', 'value': 'mortality_economic_value'})
-                if 'preterm_birth_economic_value_mean' in scenario_result.economic_benefits:
+                if 'preterm_birth_economic_value' in econ_names:
                     options.append({'label': 'Preterm Birth Economic Value ($)', 'value': 'preterm_birth_economic_value'})
-                if 'preterm_birth_reduction_mean' in scenario_result.economic_benefits:
+                if 'preterm_birth_reduction' in econ_names:
                     options.append({'label': 'Preterm Birth Reduction', 'value': 'preterm_birth_reduction'})
         
         if current_value is None:
@@ -1234,7 +1234,7 @@ def register_callbacks(app):
     def update_map(workflow_state, results, selected_scenario, selected_variable):
         global workflow_instance, cached_geojson, cached_center
         
-        if workflow_instance is None or workflow_instance.data.tract_geometries is None:
+        if workflow_instance is None or workflow_instance.inputs.tract_geometries is None:
             cached_geojson = None
             cached_center = None
             return go.Figure().update_layout(
@@ -1250,7 +1250,7 @@ def register_callbacks(app):
                 uirevision='constant'
             )
         
-        if not results or not workflow_instance.data.scenario_results:
+        if not results or not workflow_instance.results or not workflow_instance.results.scenarios:
             return go.Figure().update_layout(
                 title="No analysis results available",
                 height=600,
@@ -1285,18 +1285,18 @@ def register_callbacks(app):
         scenario_num = int(selected_scenario)
         scenario_id = scenario_num
         
-        if scenario_id not in workflow_instance.data.scenario_results:
+        scenarios_map = workflow_instance.results.scenarios
+        if scenario_id not in scenarios_map:
             return go.Figure().update_layout(
                 title=f"Scenario {scenario_num}% not found",
                 height=600,
                 uirevision='constant'
             )
         
-        # Get merged data with all scenario outputs
-        gdf = workflow_instance.data.get_merged_data()
-        scenario_result = workflow_instance.data.scenario_results[scenario_id]
+        gdf = workflow_instance.results.get_merged_data()
+        scenario_result = scenarios_map[scenario_id]
         scenario_df = scenario_result.to_dataframe()
-        scenario_name = scenario_result.scenario_label
+        scenario_name = scenario_result.spec.scenario_label
         
         # Map variable names to column names in scenario outputs
         # Health impacts are now nested under endpoint names (e.g., 'mortality_attributable_cases_mean')
@@ -1431,16 +1431,17 @@ def register_callbacks(app):
         
         global workflow_instance
         
-        if workflow_instance is None or not workflow_instance.data.scenario_results:
+        if workflow_instance is None or not workflow_instance.results or not workflow_instance.results.scenarios:
             return ""
         
         scenario_num = int(selected_scenario)
         scenario_id = scenario_num
-        
-        if scenario_id not in workflow_instance.data.scenario_results:
+        scenarios_map = workflow_instance.results.scenarios
+
+        if scenario_id not in scenarios_map:
             return ""
         
-        scenario_result = workflow_instance.data.scenario_results[scenario_id]
+        scenario_result = scenarios_map[scenario_id]
         
         summary_data = []
         
@@ -1524,11 +1525,10 @@ def register_callbacks(app):
     def update_data_viewer_dropdown(workflow_state):
         global workflow_instance
         
-        if workflow_instance is None or workflow_instance.data.tract_geometries is None:
+        if workflow_instance is None or workflow_instance.inputs.tract_geometries is None:
             return [], None
         
-        # Use get_merged_core_data() to exclude covariates
-        gdf = workflow_instance.data.get_merged_core_data()
+        gdf = _inputs_core_merged_gdf(workflow_instance)
         available_cols = [col for col in gdf.columns if col not in ['geometry']]
         
         options = [
@@ -1556,7 +1556,7 @@ def register_callbacks(app):
     def update_data_viewer_map(selected_variable, workflow_state):
         global workflow_instance, cached_geojson, cached_center
         
-        if workflow_instance is None or workflow_instance.data.tract_geometries is None:
+        if workflow_instance is None or workflow_instance.inputs.tract_geometries is None:
             return go.Figure().update_layout(
                 title="No data loaded",
                 height=600,
@@ -1579,8 +1579,7 @@ def register_callbacks(app):
                 uirevision='constant'
             )
         
-        # Use core data only (excludes covariates)
-        gdf = workflow_instance.data.get_merged_core_data()
+        gdf = _inputs_core_merged_gdf(workflow_instance)
         
         if selected_variable not in gdf.columns:
             available_cols = [col for col in gdf.columns if col not in ['geometry']]
@@ -1750,14 +1749,13 @@ def register_callbacks(app):
     def update_data_viewer_table(workflow_state):
         global workflow_instance
         
-        if workflow_instance is None or workflow_instance.data.tract_geometries is None:
+        if workflow_instance is None or workflow_instance.inputs.tract_geometries is None:
             return dbc.Alert(
                 "No data loaded. Please load data in the Setup tab.",
                 color="info"
             )
         
-        # Use core data only (excludes covariates)
-        gdf = workflow_instance.data.get_merged_core_data()
+        gdf = _inputs_core_merged_gdf(workflow_instance)
         
         # Reset index to show GEOID as a column if it's the index
         if gdf.index.name == 'GEOID' or isinstance(gdf.index, pd.Index):
@@ -1962,7 +1960,7 @@ def register_callbacks(app):
             if workflow_instance is None:
                 workflow_instance = Workflow()
 
-            if workflow_instance.data.tract_geometries is None:
+            if workflow_instance.inputs.tract_geometries is None:
                 raise ValueError("Tract geometries must be loaded first")
 
             if 'aermod_files' not in state:
@@ -1996,7 +1994,7 @@ def register_callbacks(app):
             )
             
             # Generate exposure using load_inputs method
-            if workflow_instance.data.tract_geometries is None:
+            if workflow_instance.inputs.tract_geometries is None:
                 raise ValueError("Tract geometries must be loaded first")
             
             from bensaf.exposure_generation import generate_exposure_from_aermod
@@ -2005,7 +2003,7 @@ def register_callbacks(app):
             exposure_df = generate_exposure_from_aermod(
                 landing_files=landing_file_tuples,
                 takeoff_files=takeoff_file_tuples,
-                tracts_gdf=workflow_instance.data.tract_geometries.reset_index(),
+                tracts_gdf=workflow_instance.inputs.tract_geometries.reset_index(),
                 calibration_file=calibration_file,
                 aermod_crs=aermod_crs,
                 aggregation_method='spatial_join'
@@ -2014,10 +2012,10 @@ def register_callbacks(app):
             if 'ufp' in exposure_df.columns:
                 exposure_df = exposure_df.rename(columns={'ufp': 'ufp'})
             
-            workflow_instance.data.load_baseline_exposure(exposure_df, pollutant_columns=['ufp'])
+            workflow_instance.inputs.load_baseline_exposure(exposure_df, pollutant_columns=['ufp'])
             
             state['exposure_loaded'] = True
-            state['n_exposure'] = len(workflow_instance.data.baseline_exposure)
+            state['n_exposure'] = len(workflow_instance.inputs.baseline_exposure)
             state['exposure_source'] = 'aermod'
             
             status = dbc.Alert(

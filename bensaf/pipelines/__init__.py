@@ -1,8 +1,8 @@
 """
 Pipeline functions for scenario analysis.
 
-Each pipeline function takes a Scenario object, performs computations,
-and populates the scenario's output attributes.
+Each pipeline function is a pure function that takes explicit arguments
+and returns typed domain objects rather than mutating a shared Scenario.
 """
 
 from bensaf.pipelines.exposure_pipeline import run_exposure_pipeline
