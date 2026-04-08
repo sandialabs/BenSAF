@@ -10,9 +10,9 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from bensaf.domain import EconomicBenefit, ScenarioSpec, TractEstimate
-from bensaf.data_model import AnalysisInputs
-from bensaf.economic_benefits import (
+from bensaf.model.domain import EconomicBenefit, ScenarioSpec, TractEstimate
+from bensaf.model.data_model import AnalysisInputs
+from bensaf.core.economic_benefits import (
     calculate_preterm_birth_reduction,
     calculate_preterm_birth_economic_value,
 )

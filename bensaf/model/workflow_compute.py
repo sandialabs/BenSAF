@@ -10,9 +10,9 @@ from typing import Dict, List, Optional
 
 import pandas as pd
 
-from bensaf.data_model import AnalysisInputs
-from bensaf.domain import EconomicBenefit, HealthImpact, ScenarioResult, ScenarioSpec
-from bensaf.params import (
+from bensaf.model.data_model import AnalysisInputs
+from bensaf.model.domain import EconomicBenefit, HealthImpact, ScenarioResult, ScenarioSpec
+from bensaf.utils.params import (
     load_economic_parameters,
     load_mortality_function_config,
     load_saf_blend_parameters,

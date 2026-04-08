@@ -12,10 +12,10 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from bensaf.domain import EconomicBenefit, HealthImpact, ScenarioSpec, TractEstimate
-from bensaf.data_model import AnalysisInputs
-from bensaf.health_impacts import calculate_health_impacts
-from bensaf.economic_benefits import calculate_mortality_economic_value
+from bensaf.model.domain import EconomicBenefit, HealthImpact, ScenarioSpec, TractEstimate
+from bensaf.model.data_model import AnalysisInputs
+from bensaf.core.health_impacts import calculate_health_impacts
+from bensaf.core.economic_benefits import calculate_mortality_economic_value
 
 logger = logging.getLogger(__name__)
 
