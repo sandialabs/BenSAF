@@ -5,14 +5,14 @@ This module provides functions to generate exposure data from AERMOD files
 following the expert-defined pipeline:
 1. Extract annual averages from AERMOD files
 2. Weighted combination of flows (e.g., east/west)
-3. Convert to percentiles and apply log-linear calibration to obtain UFP
-4. Aggregate UFP values at receptor locations to census tracts
+3. Apply log-linear calibration: rank percentiles of landing/takeoff CO jointly in one model, then exp
+4. Aggregate UFP at receptors to census tracts
 """
 
 import json
 import logging
 from pathlib import Path
-from typing import List, Tuple, Optional, Union
+from typing import Any, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -167,7 +167,7 @@ def load_calibration_coefficients(calibration_file: Union[str, Path]) -> Tuple[f
         calibration_file: Path to JSON file with calibration coefficients
         
     Returns:
-        Tuple of (intercept, coef_landing, coef_takeoff)
+        Tuple of (intercept, coef_landing, coef_takeoff) for use with percentile-ranked predictors
     """
     calibration_file = Path(calibration_file)
     if not calibration_file.exists():
@@ -186,49 +186,59 @@ def load_calibration_coefficients(calibration_file: Union[str, Path]) -> Tuple[f
     return intercept, coef_landing, coef_takeoff
 
 
-def apply_calibration(landing_combined: Optional[gpd.GeoDataFrame], 
-                     takeoff_combined: Optional[gpd.GeoDataFrame],
-                     calibration_file: Union[str, Path]) -> Tuple[Optional[gpd.GeoDataFrame], Optional[gpd.GeoDataFrame]]:
+def apply_calibration(
+    landing_combined: Optional[gpd.GeoDataFrame],
+    takeoff_combined: Optional[gpd.GeoDataFrame],
+    calibration_file: Union[str, Path],
+    receptor_match_tolerance: float = 1.0,
+) -> Optional[gpd.GeoDataFrame]:
     """
-    Apply log-linear calibration to convert CO concentrations to UFP concentrations.
-    
-    Args:
-        landing_combined: GeoDataFrame with combined landing flow concentrations, or None to skip
-        takeoff_combined: GeoDataFrame with combined takeoff flow concentrations, or None to skip
-        calibration_file: Path to JSON file with calibration coefficients
-        
+    Calibrate AERMOD CO to UFP with one log-linear model on **percentile-ranked** concentrations:
+
+        log(UFP) = intercept
+                   + coef_landing * rank_pct(landing CO)
+                   + coef_takeoff * rank_pct(takeoff CO)
+        UFP = exp(log(UFP))
+
+    Percentiles are ``Series.rank(pct=True)`` computed **within** landing and **within** takeoff
+    separately. When both flows exist, rows use landing geometry; takeoff percentile is taken from
+    the nearest takeoff receptor within ``receptor_match_tolerance`` m (else takeoff term uses 0).
+
+    Landing only: log(UFP) = intercept + coef_landing * rank_pct(landing).
+    Takeoff only: log(UFP) = intercept + coef_takeoff * rank_pct(takeoff).
+
     Returns:
-        Tuple of (landing_ufp, takeoff_ufp) GeoDataFrames with UFP concentrations (None if input was None)
+        GeoDataFrame with ``ufp_concentration`` and the reference flow geometry, or None if both
+        inputs are None.
     """
-    # Load calibration coefficients
     intercept, coef_landing, coef_takeoff = load_calibration_coefficients(calibration_file)
-    
-    landing_ufp = None
-    takeoff_ufp = None
-    
+
+    if landing_combined is None and takeoff_combined is None:
+        return None
+
+    if landing_combined is not None and takeoff_combined is not None:
+        ref = landing_combined.copy()
+        L_pct = ref['concentration'].rank(pct=True).to_numpy(dtype=float)
+        takeoff_pct = takeoff_combined['concentration'].rank(pct=True).to_numpy(dtype=float)
+        coords_l = np.array([[g.x, g.y] for g in ref.geometry])
+        coords_t = np.array([[g.x, g.y] for g in takeoff_combined.geometry])
+        tree = cKDTree(coords_t)
+        dist, idx = tree.query(coords_l, k=1)
+        T_pct = np.where(dist <= receptor_match_tolerance, takeoff_pct[idx], 0.0)
+        log_ufp = intercept + coef_landing * L_pct + coef_takeoff * T_pct
+        ref['ufp_concentration'] = np.exp(log_ufp)
+        return ref
+
     if landing_combined is not None:
-        # Convert to percentiles (rank-based, separately for landing)
-        landing_percentile = landing_combined['concentration'].rank(pct=True)
-        
-        # Apply log-linear model components
-        log_ufp_landing = intercept + coef_landing * landing_percentile
-        
-        # Exponentiate to get UFP concentrations
-        landing_ufp = landing_combined.copy()
-        landing_ufp['ufp_concentration'] = np.exp(log_ufp_landing)
-    
-    if takeoff_combined is not None:
-        # Convert to percentiles (rank-based, separately for takeoff)
-        takeoff_percentile = takeoff_combined['concentration'].rank(pct=True)
-        
-        # Apply log-linear model components
-        log_ufp_takeoff = intercept + coef_takeoff * takeoff_percentile
-        
-        # Exponentiate to get UFP concentrations
-        takeoff_ufp = takeoff_combined.copy()
-        takeoff_ufp['ufp_concentration'] = np.exp(log_ufp_takeoff)
-    
-    return landing_ufp, takeoff_ufp
+        ref = landing_combined.copy()
+        L_pct = ref['concentration'].rank(pct=True).to_numpy(dtype=float)
+        ref['ufp_concentration'] = np.exp(intercept + coef_landing * L_pct)
+        return ref
+
+    ref = takeoff_combined.copy()
+    T_pct = ref['concentration'].rank(pct=True).to_numpy(dtype=float)
+    ref['ufp_concentration'] = np.exp(intercept + coef_takeoff * T_pct)
+    return ref
 
 
 def idw_interpolation(source_points: np.ndarray, 
@@ -330,7 +340,8 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
                        method: str = 'spatial_join',
                        idw_power: int = 2,
                        idw_max_distance: Optional[float] = None,
-                       idw_num_neighbors: Optional[int] = None) -> pd.DataFrame:
+                       idw_num_neighbors: Optional[int] = None,
+                       **extra: Any) -> pd.DataFrame:
     """
     Aggregate receptor point values to census tracts.
     
@@ -341,19 +352,42 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
     
     For method='idw_interpolation':
         - Uses pure IDW interpolation to all tract centroids
+
+    For method='polar' (Magali / Louie receptor-to-tract rule):
+        - Zero receptors inside tract: assign value at the single nearest receptor to the
+          tract centroid (Euclidean distance in projected CRS when using _metric_crs_pair).
+        - One receptor inside: that receptor's value.
+        - More than one inside: mean of those values.
+        (Same as spatial_join for tracts with receptors; differs by using nearest neighbor
+        instead of IDW when a tract has no receptor inside.)
+        Legacy keys polar_center_xy, polar_center_crs, polar_ring_*, polar_extrapolation
+        are accepted and ignored for backward compatibility.
     
     Args:
         receptor_gdf: GeoDataFrame with receptor points and values
         value_column: Name of column containing values to aggregate
         tracts_gdf: GeoDataFrame with census tract geometries (must have GEOID)
-        method: Aggregation method ('spatial_join' or 'idw_interpolation')
+        method: 'spatial_join', 'idw_interpolation', or 'polar'
         idw_power: Power parameter for IDW (if used)
         idw_max_distance: Maximum distance for IDW (if used)
         idw_num_neighbors: Number of neighbors for IDW (if used)
+        **extra: Ignored legacy polar_* keys; any other key raises TypeError.
         
     Returns:
         DataFrame with GEOID and aggregated values
     """
+    for _legacy in (
+        'polar_center_xy',
+        'polar_center_crs',
+        'polar_ring_radii',
+        'polar_ring_bin_m',
+        'polar_snap_tol_m',
+        'polar_extrapolation',
+    ):
+        extra.pop(_legacy, None)
+    if extra:
+        unknown = ", ".join(sorted(extra.keys()))
+        raise TypeError(f"aggregate_to_tracts() got unexpected keyword arguments: {unknown}")
     # Ensure same CRS
     if receptor_gdf.crs != tracts_gdf.crs:
         tracts_gdf = tracts_gdf.to_crs(receptor_gdf.crs)
@@ -458,9 +492,40 @@ def aggregate_to_tracts(receptor_gdf: gpd.GeoDataFrame,
         })
         
         return tract_exposure
-    
+
+    elif method == 'polar':
+        points_in_tracts = gpd.sjoin(
+            receptor_gdf[[value_column, 'geometry']],
+            all_tracts,
+            how='inner',
+            predicate='within'
+        )
+        tracts_with_data = points_in_tracts.groupby('GEOID')[value_column].mean().reset_index()
+        tracts_without_data = all_tracts[~all_tracts['GEOID'].isin(tracts_with_data['GEOID'])]
+
+        if len(tracts_without_data) == 0:
+            return tracts_with_data
+
+        rec_m, twd_m = _metric_crs_pair(receptor_gdf, tracts_without_data.geometry)
+        receptor_coords = np.array([[g.x, g.y] for g in rec_m.geometry])
+        receptor_values = receptor_gdf[value_column].values
+        tract_centroids = twd_m.centroid
+        target_coords = np.array([[g.x, g.y] for g in tract_centroids])
+        tree = cKDTree(receptor_coords)
+        _, indices = tree.query(target_coords, k=1)
+        nearest_values = receptor_values[indices]
+
+        tracts_interpolated = pd.DataFrame({
+            'GEOID': tracts_without_data['GEOID'].values,
+            value_column: nearest_values
+        })
+        return pd.concat([tracts_with_data, tracts_interpolated], ignore_index=True)
+
     else:
-        raise ValueError(f"Unknown aggregation method: {method}. Must be 'spatial_join' or 'idw_interpolation'")
+        raise ValueError(
+            f"Unknown aggregation method: {method}. "
+            f"Must be 'spatial_join', 'idw_interpolation', or 'polar'"
+        )
 
 
 def generate_exposure_from_aermod(
@@ -482,25 +547,25 @@ def generate_exposure_from_aermod(
     Pipeline:
     1. Extract annual averages from AERMOD files
     2. Weighted combination of flows for landing and takeoff separately
-    3. Convert to percentiles and apply log-linear calibration to obtain UFP
-    4. Aggregate UFP values at receptor locations to census tracts
-    5. Sum landing and takeoff UFP for total exposure (if both provided)
-    
+    3. Apply one log-linear calibration on landing/takeoff **percentile ranks** to obtain UFP
+    4. Aggregate UFP to census tracts
+
     Args:
         landing_files: List of (file_path, weight) tuples for landing flows, or None to skip
         takeoff_files: List of (file_path, weight) tuples for takeoff flows, or None to skip
         tracts_gdf: GeoDataFrame with census tract geometries (must have GEOID)
         calibration_file: Path to JSON file with calibration coefficients
         aermod_crs: Coordinate reference system for AERMOD data
-        aggregation_method: Method for aggregating to tracts ('spatial_join' or 'idw_interpolation')
+        aggregation_method: 'spatial_join', 'idw_interpolation', or 'polar' (nearest-or-mean rule; see aggregate_to_tracts)
         idw_power: Power parameter for IDW interpolation
         idw_max_distance: Maximum distance for IDW interpolation (None = no limit)
         idw_num_neighbors: Number of neighbors for IDW interpolation (None = use all)
-        receptor_match_tolerance: Tolerance for matching receptors (meters)
-        **aggregation_kwargs: Additional parameters passed to aggregate_to_tracts
-        
+        receptor_match_tolerance: Meters; used for flow combination and for pairing takeoff
+            percentile to landing receptors in ``apply_calibration``
+        **aggregation_kwargs: Passed to aggregate_to_tracts (legacy polar_* keys are ignored)
+
     Returns:
-        DataFrame with GEOID and baseline_pollutant_concentration columns
+        DataFrame with GEOID and ufp columns
     """
     if landing_files is None and takeoff_files is None:
         raise ValueError("At least one of 'landing_files' or 'takeoff_files' must be provided")
@@ -566,76 +631,34 @@ def generate_exposure_from_aermod(
     
     # Step 5: Apply calibration to convert CO to UFP
     logger.info("Applying calibration to convert CO to UFP")
-    landing_ufp, takeoff_ufp = apply_calibration(
+    receptors_ufp = apply_calibration(
         landing_combined,
         takeoff_combined,
-        calibration_file
+        calibration_file,
+        receptor_match_tolerance=receptor_match_tolerance,
     )
-    if landing_ufp is not None:
-        logger.info(f"  Landing UFP: {len(landing_ufp)} receptor points")
-    if takeoff_ufp is not None:
-        logger.info(f"  Takeoff UFP: {len(takeoff_ufp)} receptor points")
-    
+    if receptors_ufp is None:
+        raise ValueError("No exposure data generated from landing or takeoff files")
+    logger.info(f"  Calibrated UFP at {len(receptors_ufp)} receptor points")
+
     # Step 6: Aggregate to census tracts
     logger.info(f"Aggregating to census tracts using method: {aggregation_method}")
-    
+
     # Ensure tracts are in AERMOD CRS for spatial operations
     tracts_aermod_crs = tracts_gdf.to_crs(aermod_crs) if tracts_gdf.crs != aermod_crs else tracts_gdf.copy()
-    
-    tracts_landing = None
-    tracts_takeoff = None
-    
-    # Aggregate landing UFP
-    if landing_ufp is not None:
-        tracts_landing = aggregate_to_tracts(
-            landing_ufp,
-            'ufp_concentration',
-            tracts_aermod_crs,
-            method=aggregation_method,
-            idw_power=idw_power,
-            idw_max_distance=idw_max_distance,
-            idw_num_neighbors=idw_num_neighbors,
-            **aggregation_kwargs
-        )
-        tracts_landing = tracts_landing.rename(columns={'ufp_concentration': 'landing_ufp'})
-        logger.info(f"  Landing UFP aggregated to {len(tracts_landing)} tracts")
-    
-    # Aggregate takeoff UFP
-    if takeoff_ufp is not None:
-        tracts_takeoff = aggregate_to_tracts(
-            takeoff_ufp,
-            'ufp_concentration',
-            tracts_aermod_crs,
-            method=aggregation_method,
-            idw_power=idw_power,
-            idw_max_distance=idw_max_distance,
-            idw_num_neighbors=idw_num_neighbors,
-            **aggregation_kwargs
-        )
-        tracts_takeoff = tracts_takeoff.rename(columns={'ufp_concentration': 'takeoff_ufp'})
-        logger.info(f"  Takeoff UFP aggregated to {len(tracts_takeoff)} tracts")
-    
-    # Step 7: Combine landing and takeoff
-    if tracts_landing is not None and tracts_takeoff is not None:
-        tracts_exposure = pd.merge(
-            tracts_landing,
-            tracts_takeoff,
-            on='GEOID',
-            how='outer'
-        )
-        # Sum landing and takeoff for total UFP
-        tracts_exposure['ufp'] = (
-            tracts_exposure['landing_ufp'].fillna(0) + 
-            tracts_exposure['takeoff_ufp'].fillna(0)
-        )
-    elif tracts_landing is not None:
-        tracts_exposure = tracts_landing.copy()
-        tracts_exposure['ufp'] = tracts_exposure['landing_ufp']
-    elif tracts_takeoff is not None:
-        tracts_exposure = tracts_takeoff.copy()
-        tracts_exposure['ufp'] = tracts_exposure['takeoff_ufp']
-    else:
-        raise ValueError("No exposure data generated from landing or takeoff files")
+
+    tracts_exposure = aggregate_to_tracts(
+        receptors_ufp,
+        'ufp_concentration',
+        tracts_aermod_crs,
+        method=aggregation_method,
+        idw_power=idw_power,
+        idw_max_distance=idw_max_distance,
+        idw_num_neighbors=idw_num_neighbors,
+        **aggregation_kwargs
+    )
+    tracts_exposure = tracts_exposure.rename(columns={'ufp_concentration': 'ufp'})
+    logger.info(f"  UFP aggregated to {len(tracts_exposure)} tracts")
     
     logger.info(f"Generated exposure data for {len(tracts_exposure)} tracts")
     logger.info(f"  Total UFP range: {tracts_exposure['ufp'].min():.6f} - {tracts_exposure['ufp'].max():.6f}")

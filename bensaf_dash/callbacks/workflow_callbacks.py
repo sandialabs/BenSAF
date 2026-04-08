@@ -257,9 +257,12 @@ def register_callbacks(app):
                     'landing_files': resolved_paths['aermod']['landing'],
                     'takeoff_files': resolved_paths['aermod']['takeoff'],
                     'calibration_file': resolved_paths['calibration'],
-                    'aggregation_method': 'spatial_join',
-                    'aermod_crs': aermod_crs
+                    'aggregation_method': case_study.get('aggregation_method', 'spatial_join'),
+                    'aermod_crs': aermod_crs,
                 }
+                agg_kw = case_study.get('aggregation_kwargs')
+                if agg_kw:
+                    exposure_data['aggregation_kwargs'] = agg_kw
                 exposure_source_str = 'aermod_workflow'
             else:
                 exposure_df = pd.read_csv(resolved_paths['exposure_csv'])
@@ -1394,7 +1397,7 @@ def register_callbacks(app):
         else:
             colorscale = "Viridis"
         
-        fig = go.Figure(go.Choroplethmapbox(
+        choropleth_kw = dict(
             geojson=gdf_json,
             locations=locations,
             z=z_values,
@@ -1403,8 +1406,13 @@ def register_callbacks(app):
             marker_line_width=0.5,
             marker_line_color='white',
             colorbar=dict(title=colorbar_title),
-            hoverinfo='skip'
-        ))
+            hoverinfo='skip',
+        )
+        if selected_variable == 'reduced_concentration':
+            choropleth_kw['zmin'] = 0
+            choropleth_kw['zmax'] = 1500
+
+        fig = go.Figure(go.Choroplethmapbox(**choropleth_kw))
         
         fig.update_layout(
             mapbox=dict(
@@ -1644,7 +1652,7 @@ def register_callbacks(app):
         z_values = gdf[selected_variable].fillna(0).tolist()
         locations = [str(f['id']) for f in gdf_json['features']]
         
-        fig = go.Figure(go.Choroplethmapbox(
+        choropleth_kw = dict(
             geojson=gdf_json,
             locations=locations,
             z=z_values,
@@ -1653,8 +1661,13 @@ def register_callbacks(app):
             marker_line_width=0.5,
             marker_line_color='white',
             colorbar=dict(title=colorbar_title),
-            hoverinfo='skip'
-        ))
+            hoverinfo='skip',
+        )
+        if selected_variable in ('baseline_pollutant_concentration', 'ufp'):
+            choropleth_kw['zmin'] = 0
+            choropleth_kw['zmax'] = 1500
+
+        fig = go.Figure(go.Choroplethmapbox(**choropleth_kw))
         
         fig.update_layout(
             mapbox=dict(
