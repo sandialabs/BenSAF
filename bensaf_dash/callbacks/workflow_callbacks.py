@@ -18,9 +18,9 @@ from dash import callback, Input, Output, State, html, ALL, ctx as dash_ctx
 import dash_bootstrap_components as dbc
 import dash
 
-from bensaf.data_model import AnalysisResults
-from bensaf.workflow import Workflow
-from bensaf.mortality_functions import MortalityFunctionLibrary
+from bensaf.model.data_model import AnalysisResults
+from bensaf.model.workflow import Workflow
+from bensaf.core.mortality_functions import MortalityFunctionLibrary
 
 
 def _inputs_core_merged_gdf(workflow):
@@ -1997,7 +1997,7 @@ def register_callbacks(app):
             if workflow_instance.inputs.tract_geometries is None:
                 raise ValueError("Tract geometries must be loaded first")
             
-            from bensaf.exposure_generation import generate_exposure_from_aermod
+            from bensaf.core.exposure_generation import generate_exposure_from_aermod
             
             aermod_crs = data_config.get('aermod_crs', 'EPSG:4326') if data_config else 'EPSG:4326'
             exposure_df = generate_exposure_from_aermod(

@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from bensaf.domain import HealthImpact, TractEstimate
+from bensaf.model.domain import HealthImpact, TractEstimate
 
 
 def calculate_health_impacts(

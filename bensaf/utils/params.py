@@ -10,11 +10,11 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from bensaf.mortality_functions import MortalityFunctionLibrary
+from bensaf.core.mortality_functions import MortalityFunctionLibrary
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DATA_DIR = Path(__file__).parent.parent / 'data'
+_DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / 'data'
 
 
 def load_saf_blend_parameters(path: Optional[Path] = None) -> List[float]:

@@ -8,7 +8,7 @@ import logging
 from typing import List, Tuple
 import pandas as pd
 
-from bensaf.domain import ScenarioSpec
+from bensaf.model.domain import ScenarioSpec
 
 logger = logging.getLogger(__name__)
 

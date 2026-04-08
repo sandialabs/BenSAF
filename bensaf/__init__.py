@@ -2,9 +2,9 @@
 BenSAF - SAF health impact assessment toolkit.
 """
 
-from bensaf.workflow import Workflow, run_analysis
-from bensaf.data_model import AnalysisConfig, AnalysisInputs, AnalysisResults
-from bensaf.domain import (
+from bensaf.model.workflow import Workflow, run_analysis
+from bensaf.model.data_model import AnalysisConfig, AnalysisInputs, AnalysisResults
+from bensaf.model.domain import (
     Estimate,
     TractEstimate,
     HealthImpact,

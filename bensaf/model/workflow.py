@@ -13,10 +13,10 @@ from pathlib import Path
 import pandas as pd
 import geopandas as gpd
 
-from bensaf.data_model import AnalysisConfig, AnalysisInputs, AnalysisResults
-from bensaf.domain import ScenarioSpec, ScenarioResult
-from bensaf.workflow_compute import run_scenario
-from bensaf.exposure_generation import (
+from bensaf.model.data_model import AnalysisConfig, AnalysisInputs, AnalysisResults
+from bensaf.model.domain import ScenarioSpec, ScenarioResult
+from bensaf.model.workflow_compute import run_scenario
+from bensaf.core.exposure_generation import (
     generate_exposure_from_aermod,
     load_exposure_from_aermod,
 )

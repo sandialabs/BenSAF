@@ -31,7 +31,7 @@ class MortalityFunctionLibrary:
         """
         if json_path is None:
             # Default to data directory in the repo
-            repo_root = Path(__file__).parent.parent
+            repo_root = Path(__file__).resolve().parents[2]
             json_path = repo_root / "data" / "mortality_functions.json"
         
         self.json_path = Path(json_path)

@@ -13,7 +13,7 @@ import geopandas as gpd
 import pandas as pd
 import logging
 
-from bensaf.domain import ScenarioResult
+from bensaf.model.domain import ScenarioResult
 
 logger = logging.getLogger(__name__)
 
