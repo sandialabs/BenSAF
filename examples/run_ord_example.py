@@ -3,7 +3,7 @@ import geopandas as gpd
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from bensaf.workflow import run_analysis
+from bensaf.model.workflow import run_analysis
 
 # Set up paths
 project_root = Path(__file__).parent.parent
