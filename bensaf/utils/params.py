@@ -10,8 +10,6 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from bensaf.core.mortality_functions import MortalityFunctionLibrary
-
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / 'data'
@@ -78,6 +76,17 @@ def load_economic_parameters(path: Optional[Path] = None) -> Dict[str, Any]:
         return defaults
 
 
+def mortality_functions_json_path(path: Optional[Path] = None) -> Path:
+    return Path(path) if path is not None else _DEFAULT_DATA_DIR / "mortality_functions.json"
+
+
+def load_mortality_functions(path: Optional[Path] = None) -> Dict[int, Dict[str, Any]]:
+    p = mortality_functions_json_path(path)
+    with open(p, encoding="utf-8") as f:
+        raw = json.load(f)
+    return {int(k): v for k, v in raw.items()}
+
+
 def load_mortality_function_config(
     function_id: Optional[int] = None,
     path: Optional[Path] = None,
@@ -92,15 +101,14 @@ def load_mortality_function_config(
     Returns:
         Dict with keys: title, mean_rr, lower_rr, upper_rr, unit_increase
     """
-    library = MortalityFunctionLibrary(json_path=path)
+    functions = load_mortality_functions(path)
 
     if function_id is None:
-        functions = library.list_functions()
         if not functions:
             raise ValueError("No mortality functions available")
-        function_id = functions[0]['id']
+        function_id = min(functions.keys())
 
-    function_data = library.get_function(function_id)
+    function_data = functions.get(function_id)
     if function_data is None:
         raise ValueError(f"Mortality function {function_id} not found")
 

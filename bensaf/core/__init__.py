@@ -1,1 +1,1 @@
-"""Core algorithms: exposure generation, mortality library, health impacts, economics."""
+"""Core algorithms: exposure generation, health impacts, economics."""

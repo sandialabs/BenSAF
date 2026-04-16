@@ -20,7 +20,7 @@ import dash
 
 from bensaf.model.data_model import AnalysisResults
 from bensaf.model.workflow import Workflow
-from bensaf.core.mortality_functions import MortalityFunctionLibrary
+from bensaf.utils.params import load_mortality_functions
 
 
 def _inputs_core_merged_gdf(workflow):
@@ -30,7 +30,21 @@ def _inputs_core_merged_gdf(workflow):
 workflow_instance = None
 cached_geojson = None
 cached_center = None
-mortality_library = None
+_mortality_functions_cache = None
+
+
+def _mortality_functions():
+    global _mortality_functions_cache
+    if _mortality_functions_cache is None:
+        _mortality_functions_cache = load_mortality_functions()
+    return _mortality_functions_cache
+
+
+def _mortality_function_rows():
+    return [
+        {"id": fid, "title": data["title"]}
+        for fid, data in sorted(_mortality_functions().items())
+    ]
 
 def _numeric_saf_scenarios(scenarios, default=(25, 50)):
     """Valid integers 0–50 for workflow/plots; None or invalid entries are dropped."""
@@ -631,12 +645,7 @@ def register_callbacks(app):
         prevent_initial_call=False
     )
     def load_mortality_functions(state):
-        global mortality_library
-        
-        if mortality_library is None:
-            mortality_library = MortalityFunctionLibrary()
-        
-        functions = mortality_library.list_functions()
+        functions = _mortality_function_rows()
         options = [
             {'label': func['title'], 'value': func['id']}
             for func in functions
@@ -652,15 +661,10 @@ def register_callbacks(app):
         prevent_initial_call=False
     )
     def update_function_details(function_id):
-        global mortality_library
-        
-        if mortality_library is None:
-            mortality_library = MortalityFunctionLibrary()
-        
         if function_id is None:
             return html.Div("Select a mortality function to view details", className="text-muted")
         
-        function_data = mortality_library.get_function(function_id)
+        function_data = _mortality_functions().get(function_id)
         
         if function_data is None:
             return html.Div("Function not found", className="text-danger")
@@ -697,12 +701,7 @@ def register_callbacks(app):
         prevent_initial_call=False
     )
     def create_mortality_function_checkboxes(selected):
-        global mortality_library
-
-        if mortality_library is None:
-            mortality_library = MortalityFunctionLibrary()
-
-        functions = mortality_library.list_functions()
+        functions = _mortality_function_rows()
 
         if not functions:
             return html.Div("No mortality functions available", className="text-muted")
@@ -842,13 +841,6 @@ def register_callbacks(app):
         prevent_initial_call=True
     )
     def update_config(selected_functions, scenarios, state):
-        global workflow_instance
-        
-        if workflow_instance is not None:
-            global mortality_library
-            if mortality_library is None:
-                mortality_library = MortalityFunctionLibrary()
-
         state['config_set'] = True
         state['config_explicitly_set'] = True
         state['scenarios'] = scenarios if scenarios else [25, 50]
@@ -2399,11 +2391,6 @@ def register_callbacks(app):
         Input('mortality-function-dropdown', 'value')
     )
     def update_health_impact_function_plot(function_id):
-        global mortality_library
-        
-        if mortality_library is None:
-            mortality_library = MortalityFunctionLibrary()
-        
         if function_id is None:
             return go.Figure().update_layout(
                 title='Health Impact Function',
@@ -2423,7 +2410,7 @@ def register_callbacks(app):
                 uirevision='constant'
             )
         
-        function_data = mortality_library.get_function(function_id)
+        function_data = _mortality_functions().get(function_id)
         if function_data is None:
             return go.Figure().update_layout(
                 title='Health Impact Function',
