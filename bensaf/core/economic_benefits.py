@@ -12,27 +12,35 @@ from typing import Union, Tuple, Optional
 
 def calculate_mortality_economic_value(
     attributable_cases: Union[float, np.ndarray, pd.Series],
-    per_capita_consumption: float,
-    life_years_gained: float = 10.0
+    per_capita_consumption: Union[float, np.ndarray, pd.Series],
+    life_years_gained: Union[float, np.ndarray, pd.Series] = 10.0,
 ) -> Union[float, np.ndarray, pd.Series]:
     """
     Calculate economic value of mortality reduction.
-    
+
     Uses the expenditure function model: life value = per_capita_consumption x life_years_gained,
     then multiplies by attributable cases to get total economic value.
-    
-    Args:
-        attributable_cases: Number of deaths avoided (can be mean, lower, or upper bound)
-        per_capita_consumption: Per capita consumption for the region (e.g., LA County, King County)
-        life_years_gained: Years of life gained per adult death avoided (default: 10)
-        
-    Returns:
-        Economic value of mortality reduction
+
+    ``per_capita_consumption`` and ``life_years_gained`` may be scalars or tract-level Series
+    aligned with ``attributable_cases`` (same index when using Series).
     """
-    life_value = per_capita_consumption * life_years_gained
-    economic_value = life_value * attributable_cases
-    
-    return economic_value
+    if isinstance(attributable_cases, pd.Series):
+        idx = attributable_cases.index
+        if isinstance(per_capita_consumption, pd.Series):
+            pc = per_capita_consumption.reindex(idx)
+        else:
+            pc = per_capita_consumption
+        if isinstance(life_years_gained, pd.Series):
+            ly = life_years_gained.reindex(idx)
+        else:
+            ly = life_years_gained
+        life_value = pc * ly
+        return attributable_cases * life_value
+
+    life_value = np.asarray(per_capita_consumption, dtype=float) * np.asarray(
+        life_years_gained, dtype=float
+    )
+    return np.asarray(attributable_cases, dtype=float) * life_value
 
 
 def calculate_preterm_birth_reduction(

@@ -133,6 +133,7 @@ class Workflow:
         exposure_data: Union[pd.DataFrame, Dict[str, Any]],
         incidence_df: pd.DataFrame,
         preterm_birth_df: Optional[pd.DataFrame] = None,
+        mortality_economic_df: Optional[pd.DataFrame] = None,
         pollutant_name: str = 'ufp',
     ) -> None:
         """
@@ -145,6 +146,8 @@ class Workflow:
             exposure_data: Exposure data; format depends on exposure_source
             incidence_df: DataFrame with incidence rates by endpoint
             preterm_birth_df: Optional DataFrame with preterm birth data
+            mortality_economic_df: Optional tract table with at least GEOID and
+                per_capita_consumption (and optionally life_years_gained)
             pollutant_name: Name of the pollutant column (default: 'ufp')
         """
         self.logger.info("Loading input data")
@@ -170,6 +173,9 @@ class Workflow:
 
         if preterm_birth_df is not None:
             self.inputs.load_preterm_birth_data(preterm_birth_df)
+
+        if mortality_economic_df is not None:
+            self.inputs.load_mortality_economic_tract_data(mortality_economic_df)
 
         self.logger.info("Input data loaded successfully")
 
@@ -245,6 +251,7 @@ def run_analysis(
     scenarios: Optional[List[float]] = None,
     pollutant_name: str = 'ufp',
     preterm_birth_df: Optional[pd.DataFrame] = None,
+    mortality_economic_df: Optional[pd.DataFrame] = None,
 ) -> AnalysisResults:
     """
     Convenience function: create a Workflow, load data, run scenarios, return results.
@@ -257,6 +264,7 @@ def run_analysis(
         exposure_data=exposure_data,
         incidence_df=incidence_df,
         preterm_birth_df=preterm_birth_df,
+        mortality_economic_df=mortality_economic_df,
         pollutant_name=pollutant_name,
     )
     return workflow.run_scenarios(scenarios=scenarios, pollutant_name=pollutant_name)

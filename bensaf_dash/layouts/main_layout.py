@@ -315,7 +315,11 @@ def create_data_tab():
                                 html.H6("Configuration", className="fw-bold mt-3 mb-2"),
                                 html.Ul([
                                     html.Li("Mortality function: Selected in Configuration tab"),
-                                    html.Li("Economic parameters: Configured in data/economic_parameters.json"),
+                                    html.Li(
+                                        "Mortality economics (optional): CSV with GEOID and "
+                                        "per_capita_consumption; optional life_years_gained. "
+                                        "Included when you load the ORD example; or upload below."
+                                    ),
                                 ], className="mb-3"),
                                 html.Label("Upload Incidence Data (CSV)", className="fw-bold"),
                                 html.Small(
@@ -341,6 +345,36 @@ def create_data_tab():
                                     multiple=False,
                                 ),
                                 html.Div(id='upload-mortality-incidence-status', className="text-muted mt-2"),
+                                html.Label(
+                                    "Upload mortality economic tract data (CSV, optional)",
+                                    className="fw-bold mt-3",
+                                ),
+                                html.Small(
+                                    "GEOID, per_capita_consumption; optional life_years_gained",
+                                    className="text-muted d-block mb-2",
+                                ),
+                                dcc.Upload(
+                                    id='upload-mortality-economic',
+                                    children=html.Div([
+                                        "Drag and Drop or ",
+                                        html.A("Select economic tract CSV"),
+                                    ]),
+                                    style={
+                                        "width": "100%",
+                                        "height": "60px",
+                                        "lineHeight": "60px",
+                                        "borderWidth": "1px",
+                                        "borderStyle": "dashed",
+                                        "borderRadius": "5px",
+                                        "textAlign": "center",
+                                        "margin": "10px 0",
+                                    },
+                                    multiple=False,
+                                ),
+                                html.Div(
+                                    id="upload-mortality-economic-status",
+                                    className="text-muted mt-2",
+                                ),
                             ]),
                         ], className="mb-3"),
                         dbc.Card([
@@ -362,8 +396,10 @@ def create_data_tab():
                                 ], className="mb-3"),
                                 html.H6("Configuration", className="fw-bold mt-3 mb-2"),
                                 html.Ul([
-                                    html.Li("Odds ratio: Configured in data/economic_parameters.json"),
-                                    html.Li("Monetary value per PtB: Configured in data/economic_parameters.json"),
+                                    html.Li(
+                                        "Odds ratio and monetary value per PtB: set on AnalysisInputs "
+                                        "via the API (e.g. set_preterm_birth_economic_parameters)."
+                                    ),
                                 ], className="mb-3"),
                                 html.Label("Upload Preterm Birth Data (CSV)", className="fw-bold"),
                                 html.Small(
@@ -575,6 +611,38 @@ def create_results_tab():
             dbc.Col([
                 html.Div(id='results-summary-cards', className="mb-4")
             ], md=12)
+        ]),
+
+        dbc.Row([
+            dbc.Col([
+                dbc.Card([
+                    dbc.CardHeader(html.H5("Export", className="mb-0")),
+                    dbc.CardBody([
+                        html.P(
+                            "Scenario summary matches the detailed results table; tract-level file includes inputs and all scenario outputs (wide columns).",
+                            className="text-muted small mb-2",
+                        ),
+                        dbc.ButtonGroup([
+                            dbc.Button(
+                                "Summary table (CSV)",
+                                id="btn-export-results-summary-csv",
+                                color="secondary",
+                                outline=True,
+                                size="sm",
+                            ),
+                            dbc.Button(
+                                "Tract-level data (CSV)",
+                                id="btn-export-results-tract-csv",
+                                color="secondary",
+                                outline=True,
+                                size="sm",
+                            ),
+                        ]),
+                        dcc.Download(id="download-results-summary-csv"),
+                        dcc.Download(id="download-results-tract-csv"),
+                    ]),
+                ], className="mb-4"),
+            ], md=12),
         ]),
         
         dbc.Row([

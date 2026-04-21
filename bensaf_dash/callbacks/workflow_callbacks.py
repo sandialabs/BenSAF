@@ -14,7 +14,8 @@ import pandas as pd
 import geopandas as gpd
 import plotly.graph_objects as go
 import plotly.express as px
-from dash import callback, Input, Output, State, html, ALL, ctx as dash_ctx
+from dash import callback, Input, Output, State, html, dcc, ALL, ctx as dash_ctx
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import dash
 
@@ -113,6 +114,10 @@ def resolve_case_study_paths(case_study):
     resolved['demographics'] = case_study_dir / files['demographics']
     resolved['mortality'] = case_study_dir / files['mortality']
     
+    # Optional tract-level mortality economic inputs (GEOID, per_capita_consumption, ...)
+    if files.get('mortality_economic'):
+        resolved['mortality_economic'] = case_study_dir / files['mortality_economic']
+
     # Optional CSV exposure file
     if 'exposure_csv' in files:
         resolved['exposure_csv'] = case_study_dir / files['exposure_csv']
@@ -235,6 +240,8 @@ def register_callbacks(app):
             return "", state
         
         try:
+            state = dict(state) if state else {}
+
             # Get case study metadata
             case_study = get_case_study_by_id(selected_case_study_id)
             resolved_paths = resolve_case_study_paths(case_study)
@@ -268,7 +275,12 @@ def register_callbacks(app):
             tracts_gdf = gpd.read_file(resolved_paths['tracts_geometries'])
             demographics_df = pd.read_csv(resolved_paths['demographics'])
             mortality_df = pd.read_csv(resolved_paths['mortality'])
-            
+            mortality_economic_df = None
+            if resolved_paths.get('mortality_economic'):
+                me_path = resolved_paths['mortality_economic']
+                if me_path.exists():
+                    mortality_economic_df = pd.read_csv(me_path)
+
             global workflow_instance, cached_geojson, cached_center
             cached_geojson = None
             cached_center = None
@@ -309,6 +321,7 @@ def register_callbacks(app):
                 exposure_source=exposure_source_str,
                 exposure_data=exposure_data,
                 incidence_df=mortality_df,
+                mortality_economic_df=mortality_economic_df,
                 pollutant_name='ufp'
             )
             
@@ -323,23 +336,39 @@ def register_callbacks(app):
             state['exposure_source'] = exposure_source
             state['mortality_loaded'] = True
             state['n_mortality'] = len(mortality_df)
-            
+            if mortality_economic_df is not None:
+                state['mortality_economic_loaded'] = True
+                state['n_mortality_economic'] = len(mortality_economic_df)
+            else:
+                state['mortality_economic_loaded'] = False
+                state['n_mortality_economic'] = 0
+
             if exposure_source == 'aermod':
                 exposure_msg = f"Generated {n_exposure} exposure records from AERMOD files"
             else:
                 exposure_msg = f"Loaded {n_exposure} exposure records from CSV"
             
-            status = dbc.Alert(
-                [
-                    html.H5(f"{case_study['name']} Loaded Successfully!", className="alert-heading"),
-                    html.P(f"Loaded {len(tracts_gdf)} census tract geometries"),
-                    html.P(f"Loaded {len(demographics_df)} demographic records"),
-                    html.P(exposure_msg),
-                    html.P(f"Loaded {len(mortality_df)} mortality records", className="mb-0")
-                ],
-                color="success",
-                className="mt-2"
-            )
+            alert_children = [
+                html.H5(f"{case_study['name']} Loaded Successfully!", className="alert-heading"),
+                html.P(f"Loaded {len(tracts_gdf)} census tract geometries"),
+                html.P(f"Loaded {len(demographics_df)} demographic records"),
+                html.P(exposure_msg),
+                html.P(f"Loaded {len(mortality_df)} mortality records"),
+            ]
+            if mortality_economic_df is not None:
+                alert_children.append(
+                    html.P(
+                        f"Loaded {len(mortality_economic_df)} mortality economic tract records",
+                        className="mb-0",
+                    )
+                )
+            else:
+                alert_children[-1] = html.P(
+                    f"Loaded {len(mortality_df)} mortality records",
+                    className="mb-0",
+                )
+
+            status = dbc.Alert(alert_children, color="success", className="mt-2")
             
             return status, state
             
@@ -566,6 +595,51 @@ def register_callbacks(app):
             return status, state
     
     @app.callback(
+        [Output('upload-mortality-economic-status', 'children'),
+         Output('workflow-state', 'data', allow_duplicate=True)],
+        Input('upload-mortality-economic', 'contents'),
+        [State('upload-mortality-economic', 'filename'),
+         State('workflow-state', 'data')],
+        prevent_initial_call=True
+    )
+    def upload_mortality_economic_data(contents, filename, state):
+        if contents is None:
+            return "", state
+
+        try:
+            content_type, content_string = contents.split(',')
+            decoded = base64.b64decode(content_string)
+            economic_df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
+
+            global workflow_instance
+            if workflow_instance is None:
+                workflow_instance = Workflow()
+
+            if workflow_instance.inputs.tract_geometries is None:
+                raise ValueError("Tract geometries must be loaded first")
+
+            workflow_instance.inputs.load_mortality_economic_tract_data(economic_df)
+
+            state = dict(state) if state else {}
+            state['mortality_economic_loaded'] = True
+            state['n_mortality_economic'] = len(economic_df)
+
+            status = dbc.Alert(
+                f"Successfully loaded mortality economic tract data ({len(economic_df)} records)",
+                color="success",
+                className="mt-2",
+            )
+            return status, state
+
+        except Exception as e:
+            status = dbc.Alert(
+                f"Error loading mortality economic data: {str(e)}",
+                color="danger",
+                className="mt-2",
+            )
+            return status, state
+
+    @app.callback(
         Output('mortality-pipeline-status', 'children'),
         Input('workflow-state', 'data')
     )
@@ -615,27 +689,36 @@ def register_callbacks(app):
         demographics_status = "✓" if state.get('demographics_loaded') else "✗"
         exposure_status = "✓" if state.get('exposure_loaded') else "✗"
         mortality_status = "✓" if state.get('mortality_loaded') else "✗"
-        
+        econ_status = "✓" if state.get('mortality_economic_loaded') else "✗"
+
+        body = [
+            html.P([
+                html.Strong(f"{tracts_status} Census Tract Geometries: "),
+                f"{state.get('n_tracts', 0)} records loaded" if state.get('tracts_loaded') else "Not loaded"
+            ]),
+            html.P([
+                html.Strong(f"{demographics_status} Demographics Data: "),
+                f"{state.get('n_demographics', 0)} records loaded" if state.get('demographics_loaded') else "Not loaded"
+            ]),
+            html.P([
+                html.Strong(f"{exposure_status} Exposure Data: "),
+                f"{state.get('n_exposure', 0)} records loaded" if state.get('exposure_loaded') else "Not loaded"
+            ]),
+            html.P([
+                html.Strong(f"{mortality_status} Mortality Data: "),
+                f"{state.get('n_mortality', 0)} records loaded" if state.get('mortality_loaded') else "Not loaded"
+            ]),
+            html.P([
+                html.Strong(f"{econ_status} Mortality economic (tract): "),
+                f"{state.get('n_mortality_economic', 0)} records loaded"
+                if state.get('mortality_economic_loaded')
+                else "Not loaded (optional)",
+            ], className="mb-0"),
+        ]
+
         return dbc.Card([
             dbc.CardHeader(html.H5("Data Loading Status")),
-            dbc.CardBody([
-                html.P([
-                    html.Strong(f"{tracts_status} Census Tract Geometries: "),
-                    f"{state.get('n_tracts', 0)} records loaded" if state.get('tracts_loaded') else "Not loaded"
-                ]),
-                html.P([
-                    html.Strong(f"{demographics_status} Demographics Data: "),
-                    f"{state.get('n_demographics', 0)} records loaded" if state.get('demographics_loaded') else "Not loaded"
-                ]),
-                html.P([
-                    html.Strong(f"{exposure_status} Exposure Data: "),
-                    f"{state.get('n_exposure', 0)} records loaded" if state.get('exposure_loaded') else "Not loaded"
-                ]),
-                html.P([
-                    html.Strong(f"{mortality_status} Mortality Data: "),
-                    f"{state.get('n_mortality', 0)} records loaded" if state.get('mortality_loaded') else "Not loaded"
-                ], className="mb-0"),
-            ])
+            dbc.CardBody(body),
         ], className="mt-3")
     
     @app.callback(
@@ -1528,6 +1611,35 @@ def register_callbacks(app):
         ], bordered=True, hover=True, responsive=True, striped=True, size='sm', className="mb-0")
         
         return table
+
+    @app.callback(
+        Output('download-results-summary-csv', 'data'),
+        Input('btn-export-results-summary-csv', 'n_clicks'),
+        State('analysis-results', 'data'),
+        prevent_initial_call=True,
+    )
+    def export_results_summary_csv(n_clicks, results):
+        if not n_clicks or not results:
+            raise PreventUpdate
+        rows = [results[k] for k in sorted(results.keys(), key=lambda x: int(x))]
+        df = pd.DataFrame(rows)
+        return dcc.send_data_frame(df.to_csv, "bensaf_scenario_summary.csv", index=False)
+
+    @app.callback(
+        Output('download-results-tract-csv', 'data'),
+        Input('btn-export-results-tract-csv', 'n_clicks'),
+        State('analysis-results', 'data'),
+        prevent_initial_call=True,
+    )
+    def export_results_tract_csv(n_clicks, results):
+        global workflow_instance
+        if not n_clicks or not results:
+            raise PreventUpdate
+        if workflow_instance is None or not workflow_instance.results:
+            raise PreventUpdate
+        gdf = workflow_instance.results.get_merged_data()
+        df = gdf.drop(columns=["geometry"], errors="ignore").reset_index()
+        return dcc.send_data_frame(df.to_csv, "bensaf_tract_level_results.csv", index=False)
     
     @app.callback(
         [Output('data-viewer-dropdown', 'options'),

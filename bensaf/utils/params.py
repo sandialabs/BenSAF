@@ -43,39 +43,6 @@ def load_saf_blend_parameters(path: Optional[Path] = None) -> List[float]:
         return default_coeffs
 
 
-def load_economic_parameters(path: Optional[Path] = None) -> Dict[str, Any]:
-    """
-    Load economic parameters from JSON.
-
-    Returns:
-        Dict with keys: per_capita_consumption, life_years_gained,
-        preterm_birth_odds_ratio, monetary_value_per_ptb
-    """
-    if path is None:
-        path = _DEFAULT_DATA_DIR / 'economic_parameters.json'
-
-    defaults: Dict[str, Any] = {
-        'per_capita_consumption': None,
-        'life_years_gained': 10.0,
-        'preterm_birth_odds_ratio': None,
-        'monetary_value_per_ptb': None,
-    }
-
-    if not path.exists():
-        logger.warning(f"Economic parameters file not found at {path}, using defaults")
-        return defaults
-
-    try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-        params = {**defaults, **data}
-        logger.info(f"Loaded economic parameters from {path}")
-        return params
-    except Exception as e:
-        logger.warning(f"Error loading economic parameters: {e}, using defaults")
-        return defaults
-
-
 def mortality_functions_json_path(path: Optional[Path] = None) -> Path:
     return Path(path) if path is not None else _DEFAULT_DATA_DIR / "mortality_functions.json"
 
