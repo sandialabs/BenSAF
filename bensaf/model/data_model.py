@@ -84,6 +84,9 @@ class AnalysisInputs:
     - baseline_exposure: DataFrame, GEOID (int) index, pollutant columns
     - incidence: DataFrame, GEOID (int) index, incidence rate columns
     - preterm_birth_core: DataFrame, GEOID (int) index, 'baseline_preterm_births' column
+    - economic_core: DataFrame, GEOID (int) index, 'per_capita_consumption' for tract mortality valuation
+
+    Optional preterm birth economics (no file): set via ``set_preterm_birth_economic_parameters``.
 
     Covariate columns (optional, for benefit-distribution analysis):
     - demographics_covariates: DataFrame, all demographic columns except 'population'
@@ -104,11 +107,17 @@ class AnalysisInputs:
         self.incidence: Optional[pd.DataFrame] = None
         self.preterm_birth_core: Optional[pd.DataFrame] = None
         self.preterm_birth_covariates: Optional[pd.DataFrame] = None
+        self.economic_core: Optional[pd.DataFrame] = None
+        self.economic_covariates: Optional[pd.DataFrame] = None
         self.derived_inputs: Optional[pd.DataFrame] = None
+
+        self.preterm_birth_odds_ratio: Optional[float] = None
+        self.monetary_value_per_ptb: Optional[float] = None
 
         # Cached merged views for backward compatibility
         self._demographics: Optional[pd.DataFrame] = None
         self._preterm_birth: Optional[pd.DataFrame] = None
+        self._economic: Optional[pd.DataFrame] = None
 
     @property
     def demographics(self) -> Optional[pd.DataFrame]:
@@ -129,6 +138,16 @@ class AnalysisInputs:
         if self.preterm_birth_covariates is not None:
             return pd.concat([self.preterm_birth_core, self.preterm_birth_covariates], axis=1)
         return self.preterm_birth_core
+
+    @property
+    def economic(self) -> Optional[pd.DataFrame]:
+        if self._economic is not None:
+            return self._economic
+        if self.economic_core is None:
+            return None
+        if self.economic_covariates is not None:
+            return pd.concat([self.economic_core, self.economic_covariates], axis=1)
+        return self.economic_core
 
     @property
     def is_ready(self) -> bool:
@@ -277,6 +296,50 @@ class AnalysisInputs:
             f"{len(covariate_columns)} covariate column(s)"
         )
 
+    def set_preterm_birth_economic_parameters(
+        self, odds_ratio: float, monetary_value_per_ptb: float
+    ) -> None:
+        """Set odds ratio and dollar value per preterm birth for the PTB economic pipeline."""
+        self.preterm_birth_odds_ratio = odds_ratio
+        self.monetary_value_per_ptb = monetary_value_per_ptb
+
+    def load_mortality_economic_tract_data(self, economic_df: pd.DataFrame) -> None:
+        """
+        Load tract-level inputs for mortality economic valuation.
+
+        Required column: ``per_capita_consumption``. Optional: ``life_years_gained`` per tract;
+        if omitted, a default of 10.0 life years per tract is used when computing benefits.
+        """
+        self.logger.info("Loading tract-level mortality economic data")
+
+        if self.tract_geometries is None:
+            raise ValueError("Tract geometries must be loaded first")
+
+        economic_df = economic_df.copy()
+
+        if 'per_capita_consumption' not in economic_df.columns:
+            raise ValueError("Economic tract data must contain 'per_capita_consumption'")
+
+        economic_df = validate_geoid_alignment(
+            economic_df, self.tract_geometries, "mortality economic tract data"
+        )
+
+        core_columns = ['per_capita_consumption']
+        if 'life_years_gained' in economic_df.columns:
+            core_columns.append('life_years_gained')
+
+        covariate_columns = [c for c in economic_df.columns if c not in core_columns]
+
+        self.economic_core = economic_df[core_columns].copy()
+        self.economic_covariates = (
+            economic_df[covariate_columns].copy() if covariate_columns else None
+        )
+        self._economic = economic_df
+        self.logger.info(
+            f"Loaded mortality economic data: {len(core_columns)} core column(s), "
+            f"{len(covariate_columns)} other column(s)"
+        )
+
     def compute_derived_inputs(self) -> None:
         """
         Compute derived input metrics from loaded demographic data.
@@ -381,6 +444,10 @@ class AnalysisResults:
             merged = merged.join(inputs.preterm_birth_covariates, how='left')
         if inputs.derived_inputs is not None:
             merged = merged.join(inputs.derived_inputs, how='left')
+        if inputs.economic_core is not None:
+            merged = merged.join(inputs.economic_core, how='left')
+        if not core_only and inputs.economic_covariates is not None:
+            merged = merged.join(inputs.economic_covariates, how='left')
 
         for result in self.scenarios.values():
             scenario_df = result.to_dataframe()

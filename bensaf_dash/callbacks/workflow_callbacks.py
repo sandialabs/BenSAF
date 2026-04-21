@@ -10,17 +10,48 @@ import json
 from pathlib import Path
 import tempfile
 
+import matplotlib
+import matplotlib.colors as mcolors
 import pandas as pd
 import geopandas as gpd
 import plotly.graph_objects as go
-import plotly.express as px
-from dash import callback, Input, Output, State, html, ALL, ctx as dash_ctx
+from plotly.subplots import make_subplots
+from dash import callback, Input, Output, State, html, dcc, ALL, ctx as dash_ctx
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import dash
 
 from bensaf.model.data_model import AnalysisResults
 from bensaf.model.workflow import Workflow
-from bensaf.core.mortality_functions import MortalityFunctionLibrary
+from bensaf.utils.params import load_mortality_functions
+
+PLOT_PRIMARY = "#18BC9C"
+PLOT_SECONDARY = "#3498DB"
+
+
+def _mpl_plotly_colorscale(cmap_name: str, n: int = 9):
+    cmap = matplotlib.colormaps[cmap_name]
+    return [[i / max(1, n - 1), mcolors.to_hex(cmap(i / max(1, n - 1)))] for i in range(n)]
+
+
+def _map_annotation_layout(title, text, x=0.5, y=0.5):
+    return go.Figure().update_layout(
+        title=title,
+        height=600,
+        template="plotly_white",
+        annotations=[
+            {
+                "text": text,
+                "xref": "paper",
+                "yref": "paper",
+                "x": x,
+                "y": y,
+                "showarrow": False,
+                "font": {"size": 16},
+            }
+        ],
+        uirevision="constant",
+    )
 
 
 def _inputs_core_merged_gdf(workflow):
@@ -30,7 +61,21 @@ def _inputs_core_merged_gdf(workflow):
 workflow_instance = None
 cached_geojson = None
 cached_center = None
-mortality_library = None
+_mortality_functions_cache = None
+
+
+def _mortality_functions():
+    global _mortality_functions_cache
+    if _mortality_functions_cache is None:
+        _mortality_functions_cache = load_mortality_functions()
+    return _mortality_functions_cache
+
+
+def _mortality_function_rows():
+    return [
+        {"id": fid, "title": data["title"]}
+        for fid, data in sorted(_mortality_functions().items())
+    ]
 
 def _numeric_saf_scenarios(scenarios, default=(25, 50)):
     """Valid integers 0–50 for workflow/plots; None or invalid entries are dropped."""
@@ -64,7 +109,7 @@ def load_saf_blend_parameters():
 def load_case_studies():
     """Load and validate case studies from JSON metadata file."""
     project_root = Path(__file__).parent.parent.parent
-    case_studies_file = project_root / 'data' / 'dash_examples' / 'case_studies.json'
+    case_studies_file = project_root / 'data' / 'case-studies' / 'case_studies.json'
     
     if not case_studies_file.exists():
         raise FileNotFoundError(f"Case studies metadata not found at {case_studies_file}")
@@ -88,8 +133,8 @@ def get_case_study_by_id(case_study_id):
 def resolve_case_study_paths(case_study):
     """Resolve all file paths for a case study relative to project root."""
     project_root = Path(__file__).parent.parent.parent
-    dash_examples_dir = project_root / 'data' / 'dash_examples'
-    case_study_dir = dash_examples_dir / case_study['folder']
+    case_studies_root = project_root / 'data' / 'case-studies'
+    case_study_dir = case_studies_root / case_study['folder']
     
     files = case_study['files']
     resolved = {}
@@ -99,6 +144,10 @@ def resolve_case_study_paths(case_study):
     resolved['demographics'] = case_study_dir / files['demographics']
     resolved['mortality'] = case_study_dir / files['mortality']
     
+    # Optional tract-level mortality economic inputs (GEOID, per_capita_consumption, ...)
+    if files.get('mortality_economic'):
+        resolved['mortality_economic'] = case_study_dir / files['mortality_economic']
+
     # Optional CSV exposure file
     if 'exposure_csv' in files:
         resolved['exposure_csv'] = case_study_dir / files['exposure_csv']
@@ -221,6 +270,8 @@ def register_callbacks(app):
             return "", state
         
         try:
+            state = dict(state) if state else {}
+
             # Get case study metadata
             case_study = get_case_study_by_id(selected_case_study_id)
             resolved_paths = resolve_case_study_paths(case_study)
@@ -254,7 +305,12 @@ def register_callbacks(app):
             tracts_gdf = gpd.read_file(resolved_paths['tracts_geometries'])
             demographics_df = pd.read_csv(resolved_paths['demographics'])
             mortality_df = pd.read_csv(resolved_paths['mortality'])
-            
+            mortality_economic_df = None
+            if resolved_paths.get('mortality_economic'):
+                me_path = resolved_paths['mortality_economic']
+                if me_path.exists():
+                    mortality_economic_df = pd.read_csv(me_path)
+
             global workflow_instance, cached_geojson, cached_center
             cached_geojson = None
             cached_center = None
@@ -295,6 +351,7 @@ def register_callbacks(app):
                 exposure_source=exposure_source_str,
                 exposure_data=exposure_data,
                 incidence_df=mortality_df,
+                mortality_economic_df=mortality_economic_df,
                 pollutant_name='ufp'
             )
             
@@ -309,23 +366,39 @@ def register_callbacks(app):
             state['exposure_source'] = exposure_source
             state['mortality_loaded'] = True
             state['n_mortality'] = len(mortality_df)
-            
+            if mortality_economic_df is not None:
+                state['mortality_economic_loaded'] = True
+                state['n_mortality_economic'] = len(mortality_economic_df)
+            else:
+                state['mortality_economic_loaded'] = False
+                state['n_mortality_economic'] = 0
+
             if exposure_source == 'aermod':
                 exposure_msg = f"Generated {n_exposure} exposure records from AERMOD files"
             else:
                 exposure_msg = f"Loaded {n_exposure} exposure records from CSV"
             
-            status = dbc.Alert(
-                [
-                    html.H5(f"{case_study['name']} Loaded Successfully!", className="alert-heading"),
-                    html.P(f"Loaded {len(tracts_gdf)} census tract geometries"),
-                    html.P(f"Loaded {len(demographics_df)} demographic records"),
-                    html.P(exposure_msg),
-                    html.P(f"Loaded {len(mortality_df)} mortality records", className="mb-0")
-                ],
-                color="success",
-                className="mt-2"
-            )
+            alert_children = [
+                html.H5(f"{case_study['name']} Loaded Successfully!", className="alert-heading"),
+                html.P(f"Loaded {len(tracts_gdf)} census tract geometries"),
+                html.P(f"Loaded {len(demographics_df)} demographic records"),
+                html.P(exposure_msg),
+                html.P(f"Loaded {len(mortality_df)} mortality records"),
+            ]
+            if mortality_economic_df is not None:
+                alert_children.append(
+                    html.P(
+                        f"Loaded {len(mortality_economic_df)} mortality economic tract records",
+                        className="mb-0",
+                    )
+                )
+            else:
+                alert_children[-1] = html.P(
+                    f"Loaded {len(mortality_df)} mortality records",
+                    className="mb-0",
+                )
+
+            status = dbc.Alert(alert_children, color="success", className="mt-2")
             
             return status, state
             
@@ -552,6 +625,51 @@ def register_callbacks(app):
             return status, state
     
     @app.callback(
+        [Output('upload-mortality-economic-status', 'children'),
+         Output('workflow-state', 'data', allow_duplicate=True)],
+        Input('upload-mortality-economic', 'contents'),
+        [State('upload-mortality-economic', 'filename'),
+         State('workflow-state', 'data')],
+        prevent_initial_call=True
+    )
+    def upload_mortality_economic_data(contents, filename, state):
+        if contents is None:
+            return "", state
+
+        try:
+            content_type, content_string = contents.split(',')
+            decoded = base64.b64decode(content_string)
+            economic_df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
+
+            global workflow_instance
+            if workflow_instance is None:
+                workflow_instance = Workflow()
+
+            if workflow_instance.inputs.tract_geometries is None:
+                raise ValueError("Tract geometries must be loaded first")
+
+            workflow_instance.inputs.load_mortality_economic_tract_data(economic_df)
+
+            state = dict(state) if state else {}
+            state['mortality_economic_loaded'] = True
+            state['n_mortality_economic'] = len(economic_df)
+
+            status = dbc.Alert(
+                f"Successfully loaded mortality economic tract data ({len(economic_df)} records)",
+                color="success",
+                className="mt-2",
+            )
+            return status, state
+
+        except Exception as e:
+            status = dbc.Alert(
+                f"Error loading mortality economic data: {str(e)}",
+                color="danger",
+                className="mt-2",
+            )
+            return status, state
+
+    @app.callback(
         Output('mortality-pipeline-status', 'children'),
         Input('workflow-state', 'data')
     )
@@ -590,53 +708,13 @@ def register_callbacks(app):
             return dbc.Badge("Not Ready", color="secondary", className="ms-2")
     
     @app.callback(
-        Output('data-summary', 'children'),
-        Input('workflow-state', 'data')
-    )
-    def update_data_summary(state):
-        if not state:
-            return ""
-        
-        tracts_status = "✓" if state.get('tracts_loaded') else "✗"
-        demographics_status = "✓" if state.get('demographics_loaded') else "✗"
-        exposure_status = "✓" if state.get('exposure_loaded') else "✗"
-        mortality_status = "✓" if state.get('mortality_loaded') else "✗"
-        
-        return dbc.Card([
-            dbc.CardHeader(html.H5("Data Loading Status")),
-            dbc.CardBody([
-                html.P([
-                    html.Strong(f"{tracts_status} Census Tract Geometries: "),
-                    f"{state.get('n_tracts', 0)} records loaded" if state.get('tracts_loaded') else "Not loaded"
-                ]),
-                html.P([
-                    html.Strong(f"{demographics_status} Demographics Data: "),
-                    f"{state.get('n_demographics', 0)} records loaded" if state.get('demographics_loaded') else "Not loaded"
-                ]),
-                html.P([
-                    html.Strong(f"{exposure_status} Exposure Data: "),
-                    f"{state.get('n_exposure', 0)} records loaded" if state.get('exposure_loaded') else "Not loaded"
-                ]),
-                html.P([
-                    html.Strong(f"{mortality_status} Mortality Data: "),
-                    f"{state.get('n_mortality', 0)} records loaded" if state.get('mortality_loaded') else "Not loaded"
-                ], className="mb-0"),
-            ])
-        ], className="mt-3")
-    
-    @app.callback(
         Output('mortality-function-dropdown', 'options'),
         Output('mortality-function-dropdown', 'value'),
         Input('workflow-state', 'data'),
         prevent_initial_call=False
     )
     def load_mortality_functions(state):
-        global mortality_library
-        
-        if mortality_library is None:
-            mortality_library = MortalityFunctionLibrary()
-        
-        functions = mortality_library.list_functions()
+        functions = _mortality_function_rows()
         options = [
             {'label': func['title'], 'value': func['id']}
             for func in functions
@@ -652,15 +730,10 @@ def register_callbacks(app):
         prevent_initial_call=False
     )
     def update_function_details(function_id):
-        global mortality_library
-        
-        if mortality_library is None:
-            mortality_library = MortalityFunctionLibrary()
-        
         if function_id is None:
             return html.Div("Select a mortality function to view details", className="text-muted")
         
-        function_data = mortality_library.get_function(function_id)
+        function_data = _mortality_functions().get(function_id)
         
         if function_data is None:
             return html.Div("Function not found", className="text-danger")
@@ -697,12 +770,7 @@ def register_callbacks(app):
         prevent_initial_call=False
     )
     def create_mortality_function_checkboxes(selected):
-        global mortality_library
-
-        if mortality_library is None:
-            mortality_library = MortalityFunctionLibrary()
-
-        functions = mortality_library.list_functions()
+        functions = _mortality_function_rows()
 
         if not functions:
             return html.Div("No mortality functions available", className="text-muted")
@@ -842,13 +910,6 @@ def register_callbacks(app):
         prevent_initial_call=True
     )
     def update_config(selected_functions, scenarios, state):
-        global workflow_instance
-        
-        if workflow_instance is not None:
-            global mortality_library
-            if mortality_library is None:
-                mortality_library = MortalityFunctionLibrary()
-
         state['config_set'] = True
         state['config_explicitly_set'] = True
         state['scenarios'] = scenarios if scenarios else [25, 50]
@@ -1024,153 +1085,146 @@ def register_callbacks(app):
             return status, {}
     
     @app.callback(
-        Output('results-summary', 'children'),
-        Input('analysis-results', 'data')
-    )
-    def update_results_summary(results):
-        if not results:
-            return dbc.Alert(
-                "No analysis results available. Please run the analysis first.",
-                color="info"
-            )
-        
-        cards = []
-        for scenario_key, scenario_results in results.items():
-            scenario = scenario_results['scenario']
-            total_cases = scenario_results['total_cases']
-            lower_cases = scenario_results['lower_cases']
-            upper_cases = scenario_results['upper_cases']
-            
-            card = dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H5(f"{scenario}% SAF Blend")),
-                    dbc.CardBody([
-                        html.H3(f"{total_cases:.2f}", className="text-center text-primary"),
-                        html.P("Attributable Cases Avoided", className="text-center text-muted"),
-                        html.P(
-                            f"95% CI: [{lower_cases:.2f}, {upper_cases:.2f}]",
-                            className="text-center small"
-                        )
-                    ])
-                ])
-            ], md=4, className="mb-3")
-            cards.append(card)
-        
-        return dbc.Row(cards)
-    
-    @app.callback(
         Output('results-bar-chart', 'figure'),
         Input('analysis-results', 'data')
     )
     def update_bar_chart(results):
+        empty = dict(
+            template="plotly_white",
+            height=400,
+            annotations=[
+                {
+                    "text": "No analysis results available. Please run analysis first.",
+                    "xref": "paper",
+                    "yref": "paper",
+                    "x": 0.5,
+                    "y": 0.5,
+                    "showarrow": False,
+                    "font": {"size": 14, "color": "gray"},
+                }
+            ],
+            uirevision="constant",
+        )
         if not results:
             return go.Figure().update_layout(
-                title='Health Impacts by SAF Scenario',
-                xaxis_title='SAF Blend Percentage',
-                yaxis_title='Attributable Cases Avoided',
-                template='plotly_white',
-                height=500,
-                annotations=[{
-                    'text': 'No analysis results available. Please run analysis first.',
-                    'xref': 'paper',
-                    'yref': 'paper',
-                    'x': 0.5,
-                    'y': 0.5,
-                    'showarrow': False,
-                    'font': {'size': 14, 'color': 'gray'}
-                }],
-                uirevision='constant'
+                title="Health impacts by SAF scenario",
+                xaxis_title="SAF scenario",
+                yaxis_title="Attributable cases avoided",
+                **empty,
             )
-        
+
         scenarios = []
         mean_cases = []
         lower_cases = []
         upper_cases = []
-        
+
         for scenario_key in sorted(results.keys(), key=lambda x: int(x)):
             scenario_results = results[scenario_key]
             scenarios.append(f"{scenario_results['scenario']}% SAF")
-            mean_cases.append(scenario_results['total_cases'])
-            lower_cases.append(scenario_results['lower_cases'])
-            upper_cases.append(scenario_results['upper_cases'])
-        
-        fig = go.Figure()
-        
-        # Check if economic benefits are available
-        has_economic = any('total_economic_benefits' in results[k] for k in results.keys())
-        has_mort_econ = any('mortality_economic_value' in results[k] for k in results.keys())
-        has_ptb_econ = any('ptb_economic_value' in results[k] for k in results.keys())
-        
-        # Add health impacts bar
-        fig.add_trace(go.Bar(
-            x=scenarios,
-            y=mean_cases,
-            name='Health Impacts (Cases)',
-            error_y=dict(
-                type='data',
-                symmetric=False,
-                array=[u - m for u, m in zip(upper_cases, mean_cases)],
-                arrayminus=[m - l for m, l in zip(mean_cases, lower_cases)]
-            ),
-            marker_color='rgb(55, 83, 109)',
-            yaxis='y'
-        ))
-        
-        # Add economic benefits if available
+            mean_cases.append(scenario_results["total_cases"])
+            lower_cases.append(scenario_results["lower_cases"])
+            upper_cases.append(scenario_results["upper_cases"])
+
+        has_economic = any("total_economic_benefits" in results[k] for k in results.keys())
+        has_mort_econ = any("mortality_economic_value" in results[k] for k in results.keys())
+        has_ptb_econ = any("ptb_economic_value" in results[k] for k in results.keys())
+
+        err_cases = dict(
+            type="data",
+            symmetric=False,
+            array=[u - m for u, m in zip(upper_cases, mean_cases)],
+            arrayminus=[m - l for m, l in zip(mean_cases, lower_cases)],
+        )
+
         if has_economic or has_mort_econ or has_ptb_econ:
             econ_values = []
             econ_lower = []
             econ_upper = []
-            
+
             for scenario_key in sorted(results.keys(), key=lambda x: int(x)):
                 scenario_results = results[scenario_key]
-                if 'total_economic_benefits' in scenario_results:
-                    econ_values.append(scenario_results['total_economic_benefits'] / 1e6)  # Convert to millions
-                    econ_lower.append(scenario_results.get('total_economic_benefits_lower', 0) / 1e6)
-                    econ_upper.append(scenario_results.get('total_economic_benefits_upper', 0) / 1e6)
-                elif 'mortality_economic_value' in scenario_results:
-                    econ_values.append(scenario_results['mortality_economic_value'] / 1e6)
-                    econ_lower.append(scenario_results.get('mortality_economic_value_lower', 0) / 1e6)
-                    econ_upper.append(scenario_results.get('mortality_economic_value_upper', 0) / 1e6)
+                if "total_economic_benefits" in scenario_results:
+                    econ_values.append(scenario_results["total_economic_benefits"] / 1e6)
+                    econ_lower.append(scenario_results.get("total_economic_benefits_lower", 0) / 1e6)
+                    econ_upper.append(scenario_results.get("total_economic_benefits_upper", 0) / 1e6)
+                elif "mortality_economic_value" in scenario_results:
+                    econ_values.append(scenario_results["mortality_economic_value"] / 1e6)
+                    econ_lower.append(scenario_results.get("mortality_economic_value_lower", 0) / 1e6)
+                    econ_upper.append(scenario_results.get("mortality_economic_value_upper", 0) / 1e6)
                 else:
                     econ_values.append(0)
                     econ_lower.append(0)
                     econ_upper.append(0)
-            
-            fig.add_trace(go.Bar(
-                x=scenarios,
-                y=econ_values,
-                name='Economic Benefits ($M)',
-                error_y=dict(
-                    type='data',
-                    symmetric=False,
-                    array=[u - m for u, m in zip(econ_upper, econ_values)],
-                    arrayminus=[m - l for m, l in zip(econ_values, econ_lower)]
+
+            fig = make_subplots(
+                rows=2,
+                cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.14,
+                subplot_titles=(
+                    "Attributable cases avoided",
+                    "Economic benefits ($ millions, mean and 95% CI)",
                 ),
-                marker_color='rgb(70, 130, 180)',
-                yaxis='y2'
-            ))
-            
-            fig.update_layout(
-                title='Health Impacts and Economic Benefits by SAF Scenario',
-                xaxis_title='SAF Blend Percentage',
-                yaxis=dict(title='Attributable Cases Avoided', side='left'),
-                yaxis2=dict(title='Economic Benefits ($M)', side='right', overlaying='y'),
-                template='plotly_white',
-                height=400,
-                uirevision='constant',
-                barmode='group'
+                row_heights=[0.52, 0.48],
             )
-        else:
-            fig.update_layout(
-                title='Health Impacts by SAF Scenario',
-                xaxis_title='SAF Blend Percentage',
-                yaxis_title='Attributable Cases Avoided',
-                template='plotly_white',
-                height=400,
-                uirevision='constant'
+            fig.add_trace(
+                go.Bar(
+                    x=scenarios,
+                    y=mean_cases,
+                    name="Cases",
+                    error_y=err_cases,
+                    marker_color=PLOT_PRIMARY,
+                ),
+                row=1,
+                col=1,
             )
-        
+            fig.add_trace(
+                go.Bar(
+                    x=scenarios,
+                    y=econ_values,
+                    name="Economic ($M)",
+                    error_y=dict(
+                        type="data",
+                        symmetric=False,
+                        array=[u - m for u, m in zip(econ_upper, econ_values)],
+                        arrayminus=[m - l for m, l in zip(econ_values, econ_lower)],
+                    ),
+                    marker_color=PLOT_SECONDARY,
+                ),
+                row=2,
+                col=1,
+            )
+            fig.update_xaxes(title_text="SAF scenario", row=2, col=1)
+            fig.update_yaxes(title_text="Cases", row=1, col=1)
+            fig.update_yaxes(title_text="$M", row=2, col=1)
+            fig.update_layout(
+                title="Health impacts and economic benefits by SAF scenario",
+                template="plotly_white",
+                height=520,
+                uirevision="constant",
+                showlegend=False,
+                margin=dict(t=64),
+            )
+            return fig
+
+        fig = go.Figure()
+        fig.add_trace(
+            go.Bar(
+                x=scenarios,
+                y=mean_cases,
+                name="Cases",
+                error_y=err_cases,
+                marker_color=PLOT_PRIMARY,
+            )
+        )
+        fig.update_layout(
+            title="Health impacts by SAF scenario",
+            xaxis_title="SAF scenario",
+            yaxis_title="Attributable cases avoided",
+            template="plotly_white",
+            height=400,
+            uirevision="constant",
+        )
         return fig
     
     @app.callback(
@@ -1252,49 +1306,21 @@ def register_callbacks(app):
         if workflow_instance is None or workflow_instance.inputs.tract_geometries is None:
             cached_geojson = None
             cached_center = None
-            return go.Figure().update_layout(
-                title="No data loaded",
-                height=600,
-                annotations=[{
-                    'text': 'Please load data in the Setup tab',
-                    'xref': 'paper',
-                    'yref': 'paper',
-                    'showarrow': False,
-                    'font': {'size': 16}
-                }],
-                uirevision='constant'
+            return _map_annotation_layout(
+                "No data loaded",
+                "Please load inputs from the Data tab.",
             )
-        
+
         if not results or not workflow_instance.results or not workflow_instance.results.scenarios:
-            return go.Figure().update_layout(
-                title="No analysis results available",
-                height=600,
-                annotations=[{
-                    'text': 'Please run analysis in the Setup tab',
-                    'xref': 'paper',
-                    'yref': 'paper',
-                    'x': 0.5,
-                    'y': 0.5,
-                    'showarrow': False,
-                    'font': {'size': 16}
-                }],
-                uirevision='constant'
+            return _map_annotation_layout(
+                "No analysis results available",
+                "Run analysis using Execute Analysis in the header.",
             )
-        
+
         if not selected_scenario or not selected_variable:
-            return go.Figure().update_layout(
-                title="Please select scenario and variable",
-                height=600,
-                annotations=[{
-                    'text': 'Select a scenario and variable from the dropdowns above',
-                    'xref': 'paper',
-                    'yref': 'paper',
-                    'x': 0.5,
-                    'y': 0.5,
-                    'showarrow': False,
-                    'font': {'size': 16}
-                }],
-                uirevision='constant'
+            return _map_annotation_layout(
+                "Select scenario and variable",
+                "Choose a SAF scenario and a result variable from the dropdowns above.",
             )
         
         scenario_num = int(selected_scenario)
@@ -1305,7 +1331,8 @@ def register_callbacks(app):
             return go.Figure().update_layout(
                 title=f"Scenario {scenario_num}% not found",
                 height=600,
-                uirevision='constant'
+                template="plotly_white",
+                uirevision="constant",
             )
         
         gdf = workflow_instance.results.get_merged_data()
@@ -1343,7 +1370,8 @@ def register_callbacks(app):
             return go.Figure().update_layout(
                 title=f"Variable '{selected_variable}' not available for scenario {scenario_num}%",
                 height=600,
-                uirevision='constant'
+                template="plotly_white",
+                uirevision="constant",
             )
         
         if cached_geojson is None or cached_center is None:
@@ -1356,7 +1384,8 @@ def register_callbacks(app):
                 return go.Figure().update_layout(
                     title="No features to display",
                     height=600,
-                    uirevision='constant'
+                    template="plotly_white",
+                    uirevision="constant",
                 )
             
             # Project to a projected CRS for centroid calculation to avoid geographic CRS warning
@@ -1401,24 +1430,30 @@ def register_callbacks(app):
         var_label = variable_labels.get(selected_variable, selected_variable)
         title_text = f'{var_label} by Census Tract ({scenario_num}% SAF)'
         
-        # Choose colorscale based on variable type
-        if 'economic' in selected_variable.lower():
-            colorscale = "Blues"
-        elif 'reduction' in selected_variable.lower() or 'ptb' in selected_variable.lower():
-            colorscale = "OrRd"
+        if "economic" in selected_variable.lower():
+            colorscale = _mpl_plotly_colorscale("Blues")
+        elif "reduction" in selected_variable.lower() or "ptb" in selected_variable.lower():
+            colorscale = _mpl_plotly_colorscale("YlOrRd")
         else:
-            colorscale = "Viridis"
+            colorscale = _mpl_plotly_colorscale("YlGnBu")
         
+        customdata = [[gid, z] for gid, z in zip(locations, z_values)]
+        hovertemplate = (
+            f"<b>{var_label}</b><br>"
+            "GEOID: %{customdata[0]}<br>"
+            "Value: %{customdata[1]:,.4f}<extra></extra>"
+        )
         choropleth_kw = dict(
             geojson=gdf_json,
             locations=locations,
             z=z_values,
             colorscale=colorscale,
-            marker_opacity=0.5,
+            marker_opacity=0.68,
             marker_line_width=0.5,
-            marker_line_color='white',
+            marker_line_color="white",
             colorbar=dict(title=colorbar_title),
-            hoverinfo='skip',
+            customdata=customdata,
+            hovertemplate=hovertemplate,
         )
         if selected_variable == 'reduced_concentration':
             choropleth_kw['zmin'] = 0
@@ -1435,6 +1470,7 @@ def register_callbacks(app):
             title=title_text,
             height=600,
             margin={"r":0,"t":40,"l":0,"b":0},
+            template="plotly_white",
             uirevision=f"{selected_scenario}_{selected_variable}"
         )
         
@@ -1447,19 +1483,22 @@ def register_callbacks(app):
     )
     def update_results_summary_table(selected_scenario, results):
         if not selected_scenario or not results:
-            return ""
+            return html.Small(
+                "Run analysis, then pick a SAF scenario above to see key metrics.",
+                className="text-muted",
+            )
         
         global workflow_instance
         
         if workflow_instance is None or not workflow_instance.results or not workflow_instance.results.scenarios:
-            return ""
-        
+            return html.Small("Run analysis to populate scenario metrics.", className="text-muted")
+
         scenario_num = int(selected_scenario)
         scenario_id = scenario_num
         scenarios_map = workflow_instance.results.scenarios
 
         if scenario_id not in scenarios_map:
-            return ""
+            return html.Small("Selected scenario is not available.", className="text-muted")
         
         scenario_result = scenarios_map[scenario_id]
         
@@ -1488,8 +1527,8 @@ def register_callbacks(app):
             })
         
         if not summary_data:
-            return ""
-        
+            return html.Small("No summary rows for this scenario.", className="text-muted")
+
         rows = []
         for item in summary_data:
             rows.append(html.Tr([
@@ -1536,6 +1575,35 @@ def register_callbacks(app):
         ], bordered=True, hover=True, responsive=True, striped=True, size='sm', className="mb-0")
         
         return table
+
+    @app.callback(
+        Output('download-results-summary-csv', 'data'),
+        Input('btn-export-results-summary-csv', 'n_clicks'),
+        State('analysis-results', 'data'),
+        prevent_initial_call=True,
+    )
+    def export_results_summary_csv(n_clicks, results):
+        if not n_clicks or not results:
+            raise PreventUpdate
+        rows = [results[k] for k in sorted(results.keys(), key=lambda x: int(x))]
+        df = pd.DataFrame(rows)
+        return dcc.send_data_frame(df.to_csv, "bensaf_scenario_summary.csv", index=False)
+
+    @app.callback(
+        Output('download-results-tract-csv', 'data'),
+        Input('btn-export-results-tract-csv', 'n_clicks'),
+        State('analysis-results', 'data'),
+        prevent_initial_call=True,
+    )
+    def export_results_tract_csv(n_clicks, results):
+        global workflow_instance
+        if not n_clicks or not results:
+            raise PreventUpdate
+        if workflow_instance is None or not workflow_instance.results:
+            raise PreventUpdate
+        gdf = workflow_instance.results.get_merged_data()
+        df = gdf.drop(columns=["geometry"], errors="ignore").reset_index()
+        return dcc.send_data_frame(df.to_csv, "bensaf_tract_level_results.csv", index=False)
     
     @app.callback(
         [Output('data-viewer-dropdown', 'options'),
@@ -1577,26 +1645,17 @@ def register_callbacks(app):
         global workflow_instance, cached_geojson, cached_center
         
         if workflow_instance is None or workflow_instance.inputs.tract_geometries is None:
-            return go.Figure().update_layout(
-                title="No data loaded",
-                height=600,
-                annotations=[{
-                    'text': 'Please load data in the Setup tab',
-                    'xref': 'paper',
-                    'yref': 'paper',
-                    'x': 0.5,
-                    'y': 0.5,
-                    'showarrow': False,
-                    'font': {'size': 16}
-                }],
-                uirevision='constant'
+            return _map_annotation_layout(
+                "No data loaded",
+                "Please load inputs from the Data tab.",
             )
-        
+
         if selected_variable is None:
             return go.Figure().update_layout(
                 title="Please select a variable",
                 height=600,
-                uirevision='constant'
+                template="plotly_white",
+                uirevision="constant",
             )
         
         gdf = _inputs_core_merged_gdf(workflow_instance)
@@ -1606,16 +1665,19 @@ def register_callbacks(app):
             return go.Figure().update_layout(
                 title=f"Variable '{selected_variable}' not available",
                 height=600,
-                annotations=[{
-                    'text': f'Available columns: {", ".join(available_cols[:5])}...',
-                    'xref': 'paper',
-                    'yref': 'paper',
-                    'x': 0.5,
-                    'y': 0.5,
-                    'showarrow': False,
-                    'font': {'size': 14}
-                }],
-                uirevision='constant'
+                template="plotly_white",
+                annotations=[
+                    {
+                        "text": f'Available columns: {", ".join(available_cols[:5])}...',
+                        "xref": "paper",
+                        "yref": "paper",
+                        "x": 0.5,
+                        "y": 0.5,
+                        "showarrow": False,
+                        "font": {"size": 14},
+                    }
+                ],
+                uirevision="constant",
             )
         
         # Create a readable label for the colorbar
@@ -1663,17 +1725,24 @@ def register_callbacks(app):
         
         z_values = gdf[selected_variable].fillna(0).tolist()
         locations = [str(f['id']) for f in gdf_json['features']]
-        
+        customdata = [[gid, z] for gid, z in zip(locations, z_values)]
+        hovertemplate = (
+            f"<b>{colorbar_title}</b><br>"
+            "GEOID: %{customdata[0]}<br>"
+            "Value: %{customdata[1]:,.4f}<extra></extra>"
+        )
+
         choropleth_kw = dict(
             geojson=gdf_json,
             locations=locations,
             z=z_values,
-            colorscale="Viridis",
-            marker_opacity=0.5,
+            colorscale=_mpl_plotly_colorscale("YlGnBu"),
+            marker_opacity=0.68,
             marker_line_width=0.5,
-            marker_line_color='white',
+            marker_line_color="white",
             colorbar=dict(title=colorbar_title),
-            hoverinfo='skip',
+            customdata=customdata,
+            hovertemplate=hovertemplate,
         )
         if selected_variable in ('baseline_pollutant_concentration', 'ufp'):
             choropleth_kw['zmin'] = 0
@@ -1690,6 +1759,7 @@ def register_callbacks(app):
             title=f'{colorbar_title} by Census Tract',
             height=600,
             margin={"r":0,"t":40,"l":0,"b":0},
+            template="plotly_white",
             uirevision=selected_variable
         )
         
@@ -1719,8 +1789,8 @@ def register_callbacks(app):
             x=saf_range,
             y=reductions,
             mode='lines',
-            name='Polynomial Fit',
-            line=dict(color='blue', width=3)
+            name='Polynomial fit',
+            line=dict(color=PLOT_PRIMARY, width=3),
         ))
         
         scenarios_list = _numeric_saf_scenarios(scenarios)
@@ -1734,8 +1804,8 @@ def register_callbacks(app):
                 x=scenarios_list,
                 y=scenario_reductions,
                 mode='markers',
-                name='Analysis Scenarios',
-                marker=dict(color='red', size=12, symbol='circle')
+                name='Analysis scenarios',
+                marker=dict(color=PLOT_SECONDARY, size=11, symbol='circle', line=dict(width=1, color='white')),
             ))
         
         equation_text = f"Reduction = {coeffs[0]:.3f} + {coeffs[1]:.3f}·SAF + {coeffs[2]:.5f}·SAF²"
@@ -1747,19 +1817,21 @@ def register_callbacks(app):
             template='plotly_white',
             height=400,
             uirevision='constant',
-            annotations=[{
-                'text': equation_text,
-                'xref': 'paper',
-                'yref': 'paper',
-                'x': 0.02,
-                'y': 0.98,
-                'showarrow': False,
-                'font': {'size': 12},
-                'align': 'left',
-                'bgcolor': 'rgba(255, 255, 255, 0.8)',
-                'bordercolor': 'black',
-                'borderwidth': 1
-            }]
+            annotations=[
+                {
+                    "text": equation_text,
+                    "xref": "paper",
+                    "yref": "paper",
+                    "x": 0.02,
+                    "y": 0.98,
+                    "showarrow": False,
+                    "font": {"size": 11, "color": "#5a6570"},
+                    "align": "left",
+                    "bgcolor": "rgba(255, 255, 255, 0.94)",
+                    "bordercolor": "rgba(0, 0, 0, 0.06)",
+                    "borderwidth": 1,
+                }
+            ],
         )
         
         fig.update_xaxes(range=[0, 100])
@@ -1776,7 +1848,7 @@ def register_callbacks(app):
         
         if workflow_instance is None or workflow_instance.inputs.tract_geometries is None:
             return dbc.Alert(
-                "No data loaded. Please load data in the Setup tab.",
+                "No data loaded. Please load data from the Data tab.",
                 color="info"
             )
         
@@ -2105,174 +2177,23 @@ def register_callbacks(app):
         )
         analysis_complete = bool(analysis_results)
         
-        data_icon = html.Span("✓", className="text-success", style={"fontSize": "20px", "fontWeight": "bold"}) if data_loaded else html.Span("○", className="text-muted", style={"fontSize": "20px"})
-        config_icon = html.Span("✓", className="text-success", style={"fontSize": "20px", "fontWeight": "bold"}) if config_set else html.Span("○", className="text-muted", style={"fontSize": "20px"})
-        analysis_icon = html.Span("✓", className="text-success", style={"fontSize": "20px", "fontWeight": "bold"}) if analysis_complete else html.Span("○", className="text-muted", style={"fontSize": "20px"})
-        results_icon = html.Span("✓", className="text-success", style={"fontSize": "20px", "fontWeight": "bold"}) if analysis_complete else html.Span("○", className="text-muted", style={"fontSize": "20px"})
+        def _step_chip(done):
+            if done:
+                return html.Div(
+                    className="bensaf-step-circle bg-success text-white border-0 d-inline-flex align-items-center justify-content-center",
+                    children=[html.I(className="bi bi-check-lg")],
+                )
+            return html.Div(
+                className="bensaf-step-circle bg-light text-muted border d-inline-flex align-items-center justify-content-center",
+                children=[html.I(className="bi bi-circle")],
+            )
+
+        data_icon = _step_chip(data_loaded)
+        config_icon = _step_chip(config_set)
+        analysis_icon = _step_chip(analysis_complete)
+        results_icon = _step_chip(analysis_complete)
         
         return data_icon, config_icon, analysis_icon, results_icon
-    
-    @app.callback(
-        Output('header-data-status', 'children'),
-        Input('workflow-state', 'data')
-    )
-    def update_header_data_status(workflow_state):
-        """Update compact data status in header"""
-        if not workflow_state:
-            return html.Span("No data loaded", className="text-muted")
-        
-        tracts_loaded = workflow_state.get('tracts_loaded', False)
-        exposure_loaded = workflow_state.get('exposure_loaded', False)
-        mortality_loaded = workflow_state.get('mortality_loaded', False)
-        config_set = (
-            workflow_state.get('config_set', False) and 
-            workflow_state.get('config_explicitly_set', False) and
-            workflow_state.get('config_tab_visited', False)
-        )
-        
-        status_items = []
-        status_items.append(html.Span("Tracts: ", className="fw-bold"))
-        status_items.append(html.Span("✓" if tracts_loaded else "✗", className="text-success" if tracts_loaded else "text-danger"))
-        status_items.append(html.Span(" | ", className="mx-1"))
-        status_items.append(html.Span("Exposure: ", className="fw-bold"))
-        status_items.append(html.Span("✓" if exposure_loaded else "✗", className="text-success" if exposure_loaded else "text-danger"))
-        status_items.append(html.Span(" | ", className="mx-1"))
-        status_items.append(html.Span("Mortality: ", className="fw-bold"))
-        status_items.append(html.Span("✓" if mortality_loaded else "✗", className="text-success" if mortality_loaded else "text-danger"))
-        status_items.append(html.Span(" | ", className="mx-1"))
-        status_items.append(html.Span("Config: ", className="fw-bold"))
-        status_items.append(html.Span("✓" if config_set else "✗", className="text-success" if config_set else "text-danger"))
-        
-        return html.Div(status_items)
-    
-    @app.callback(
-        Output('overview-data-status', 'children'),
-        Input('workflow-state', 'data')
-    )
-    def update_overview_data_status(workflow_state):
-        """Update data status cards in overview tab"""
-        if not workflow_state:
-            return dbc.Alert("No data loaded yet", color="info")
-        
-        cards = []
-        
-        tracts_status = workflow_state.get('tracts_loaded', False)
-        tracts_count = workflow_state.get('n_tracts', 0)
-        cards.append(
-            dbc.Card([
-                dbc.CardBody([
-                    html.H6("Census Tracts", className="card-title"),
-                    html.P(f"{'✓ Loaded' if tracts_status else '✗ Not loaded'}", className="mb-1"),
-                    html.Small(f"{tracts_count} records" if tracts_status else "No data", className="text-muted")
-                ])
-            ], color="success" if tracts_status else "light", className="mb-2")
-        )
-        
-        demographics_status = workflow_state.get('demographics_loaded', False)
-        demographics_count = workflow_state.get('n_demographics', 0)
-        cards.append(
-            dbc.Card([
-                dbc.CardBody([
-                    html.H6("Demographics", className="card-title"),
-                    html.P(f"{'✓ Loaded' if demographics_status else '✗ Not loaded'}", className="mb-1"),
-                    html.Small(f"{demographics_count} records" if demographics_status else "No data", className="text-muted")
-                ])
-            ], color="success" if demographics_status else "light", className="mb-2")
-        )
-        
-        exposure_status = workflow_state.get('exposure_loaded', False)
-        exposure_count = workflow_state.get('n_exposure', 0)
-        exposure_source = workflow_state.get('exposure_source', 'unknown')
-        cards.append(
-            dbc.Card([
-                dbc.CardBody([
-                    html.H6("Exposure Data", className="card-title"),
-                    html.P(f"{'✓ Loaded' if exposure_status else '✗ Not loaded'}", className="mb-1"),
-                    html.Small(f"{exposure_count} records ({exposure_source})" if exposure_status else "No data", className="text-muted")
-                ])
-            ], color="success" if exposure_status else "light", className="mb-2")
-        )
-        
-        mortality_status = workflow_state.get('mortality_loaded', False)
-        mortality_count = workflow_state.get('n_mortality', 0)
-        cards.append(
-            dbc.Card([
-                dbc.CardBody([
-                    html.H6("Mortality Data", className="card-title"),
-                    html.P(f"{'✓ Loaded' if mortality_status else '✗ Not loaded'}", className="mb-1"),
-                    html.Small(f"{mortality_count} records" if mortality_status else "No data", className="text-muted")
-                ])
-            ], color="success" if mortality_status else "light", className="mb-2")
-        )
-        
-        return html.Div(cards)
-    
-    @app.callback(
-        Output('overview-config-status', 'children'),
-        Input('workflow-state', 'data')
-    )
-    def update_overview_config_status(workflow_state):
-        """Update configuration status in overview tab"""
-        if not workflow_state:
-            return dbc.Alert("Configuration not set", color="info")
-        
-        config_set = workflow_state.get('config_set', False)
-        scenarios = workflow_state.get('scenarios', [])
-        
-        if config_set:
-            return dbc.Card([
-                dbc.CardBody([
-                    html.H6("Configuration", className="card-title"),
-                    html.P("✓ Configured", className="mb-1 text-success"),
-                    html.Small(
-                        f"Scenarios: {', '.join([f'{s}%' for s in scenarios if s is not None])}",
-                        className="text-muted",
-                    )
-                ])
-            ], color="success")
-        else:
-            return dbc.Card([
-                dbc.CardBody([
-                    html.H6("Configuration", className="card-title"),
-                    html.P("✗ Not configured", className="mb-1 text-muted"),
-                    html.Small("Go to Configuration tab to set parameters", className="text-muted")
-                ])
-            ], color="light")
-    
-    @app.callback(
-        Output('overview-results-summary', 'children'),
-        Input('analysis-results', 'data')
-    )
-    def update_overview_results_summary(analysis_results):
-        """Update results summary in overview tab"""
-        if not analysis_results:
-            return dbc.Alert("No analysis results available. Run analysis to see results.", color="info")
-        
-        cards = []
-        for scenario_key in sorted(analysis_results.keys(), key=lambda x: int(x)):
-            scenario_results = analysis_results[scenario_key]
-            scenario = scenario_results['scenario']
-            total_cases = scenario_results['total_cases']
-            lower_cases = scenario_results['lower_cases']
-            upper_cases = scenario_results['upper_cases']
-            
-            cards.append(
-                dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader(html.H6(f"{scenario}% SAF Blend", className="mb-0")),
-                        dbc.CardBody([
-                            html.H4(f"{total_cases:.2f}", className="text-center text-primary mb-2"),
-                            html.P("Cases Avoided", className="text-center text-muted mb-1 small"),
-                            html.P(
-                                f"95% CI: [{lower_cases:.2f}, {upper_cases:.2f}]",
-                                className="text-center small text-muted mb-0"
-                            )
-                        ])
-                    ])
-                ], md=4, className="mb-3")
-            )
-        
-        return dbc.Row(cards)
     
     @app.callback(
         Output('results-summary-cards', 'children'),
@@ -2330,10 +2251,16 @@ def register_callbacks(app):
             
             cards.append(
                 dbc.Col([
-                    dbc.Card([
-                        dbc.CardHeader(html.H5(f"{scenario}% SAF Blend", className="mb-0")),
-                        dbc.CardBody(card_body)
-                    ], className="h-100")
+                    dbc.Card(
+                        [
+                            dbc.CardHeader(
+                                html.H5(f"{scenario}% SAF Blend", className="mb-0"),
+                                className="bg-light",
+                            ),
+                            dbc.CardBody(card_body),
+                        ],
+                        className="h-100 shadow-sm border-start border-primary border-4",
+                    )
                 ], md=4, className="mb-3")
             )
         
@@ -2370,7 +2297,11 @@ def register_callbacks(app):
         
         checklist_items = []
         for item_name, item_status in items:
-            icon = html.Span("✓", className="text-success me-2", style={"fontWeight": "bold"}) if item_status else html.Span("✗", className="text-danger me-2", style={"fontWeight": "bold"})
+            icon = (
+                html.I(className="bi bi-check-circle-fill text-success me-2")
+                if item_status
+                else html.I(className="bi bi-x-circle-fill text-danger me-2")
+            )
             checklist_items.append(
                 html.Div([
                     icon,
@@ -2399,11 +2330,6 @@ def register_callbacks(app):
         Input('mortality-function-dropdown', 'value')
     )
     def update_health_impact_function_plot(function_id):
-        global mortality_library
-        
-        if mortality_library is None:
-            mortality_library = MortalityFunctionLibrary()
-        
         if function_id is None:
             return go.Figure().update_layout(
                 title='Health Impact Function',
@@ -2423,7 +2349,7 @@ def register_callbacks(app):
                 uirevision='constant'
             )
         
-        function_data = mortality_library.get_function(function_id)
+        function_data = _mortality_functions().get(function_id)
         if function_data is None:
             return go.Figure().update_layout(
                 title='Health Impact Function',
@@ -2447,7 +2373,6 @@ def register_callbacks(app):
         lower_rr = function_data['lower_rr']
         upper_rr = function_data['upper_rr']
         unit_increase = function_data['unit_increase']
-        """Create health impact function visualization"""
         import numpy as np
         
         if mean_rr is None or lower_rr is None or upper_rr is None or unit_increase is None:
@@ -2494,7 +2419,7 @@ def register_callbacks(app):
             y=mean_rr_values,
             mode='lines',
             name='Mean',
-            line=dict(color='blue', width=3)
+            line=dict(color=PLOT_PRIMARY, width=3),
         ))
         
         fig.add_trace(go.Scatter(
@@ -2502,7 +2427,7 @@ def register_callbacks(app):
             y=lower_rr_values,
             mode='lines',
             name='Lower 95% CI',
-            line=dict(color='blue', width=1, dash='dash'),
+            line=dict(color=PLOT_PRIMARY, width=1, dash='dash'),
             showlegend=True
         ))
         
@@ -2511,17 +2436,16 @@ def register_callbacks(app):
             y=upper_rr_values,
             mode='lines',
             name='Upper 95% CI',
-            line=dict(color='blue', width=1, dash='dash'),
+            line=dict(color=PLOT_PRIMARY, width=1, dash='dash'),
             fill='tonexty',
-            fillcolor='rgba(0, 100, 255, 0.1)',
+            fillcolor="rgba(24, 188, 156, 0.15)",
             showlegend=True
         ))
         
-        # Add vertical line at unit_increase
         fig.add_vline(
             x=unit_increase,
             line_dash="dot",
-            line_color="red",
+            line_color=PLOT_SECONDARY,
             annotation_text=f"Unit Increase: {unit_increase} pt/cm³",
             annotation_position="top"
         )

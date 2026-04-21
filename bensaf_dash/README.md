@@ -73,10 +73,10 @@ Upload your analysis data or load example data:
 - **Mortality Data**: CSV file with baseline mortality rates
   - Required columns: `GEOID`, `mortality_rate`
 
-**Option B: Load Example Data**
-- Click **"Load ORD Example Data"** button to load the O'Hare International Airport case study
-- Automatically loads all three required datasets
-- Great for testing and learning the workflow
+**Option B: Load Example Case Study**
+- Choose a case study in the dropdown, then **Load Selected Case Study** (inputs under `data/case-studies/`)
+- Loads tract geometry, demographics, exposure, and mortality inputs for that study
+- Useful for testing and learning the workflow
 
 #### 2. Configuration Tab
 

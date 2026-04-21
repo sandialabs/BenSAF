@@ -12,11 +12,7 @@ import pandas as pd
 
 from bensaf.model.data_model import AnalysisInputs
 from bensaf.model.domain import EconomicBenefit, HealthImpact, ScenarioResult, ScenarioSpec
-from bensaf.utils.params import (
-    load_economic_parameters,
-    load_mortality_function_config,
-    load_saf_blend_parameters,
-)
+from bensaf.utils.params import load_mortality_function_config, load_saf_blend_parameters
 from bensaf.pipelines.exposure_pipeline import run_exposure_pipeline
 from bensaf.pipelines.mortality_pipeline import run_mortality_pipeline
 from bensaf.pipelines.preterm_birth_pipeline import run_preterm_birth_pipeline
@@ -44,7 +40,6 @@ def run_scenario(
     logger.debug(f"Running scenario {spec.scenario_id} ({spec.scenario_label})")
 
     polynomial_coeffs = load_saf_blend_parameters()
-    econ_params = load_economic_parameters()
     mortality_params = load_mortality_function_config(mortality_function_id)
 
     # Exposure pipeline
@@ -61,7 +56,6 @@ def run_scenario(
         delta_concentration=delta_concentration,
         inputs=inputs,
         mortality_function_params=mortality_params,
-        econ_params=econ_params,
     )
     if mortality_result is not None:
         impact, econ_benefit = mortality_result
@@ -74,7 +68,6 @@ def run_scenario(
         spec=spec,
         delta_concentration=delta_concentration,
         inputs=inputs,
-        params=econ_params,
     )
     if ptb_benefits is not None:
         economic_benefits.extend(ptb_benefits)

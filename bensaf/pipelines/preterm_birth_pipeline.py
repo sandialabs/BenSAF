@@ -6,7 +6,7 @@ returns typed domain objects rather than mutating a Scenario.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 import pandas as pd
 
@@ -24,7 +24,6 @@ def run_preterm_birth_pipeline(
     spec: ScenarioSpec,
     delta_concentration: pd.Series,
     inputs: AnalysisInputs,
-    params: Dict[str, Any],
 ) -> Optional[List[EconomicBenefit]]:
     """
     Compute preterm birth reduction and economic benefit.
@@ -32,16 +31,17 @@ def run_preterm_birth_pipeline(
     Args:
         spec: ScenarioSpec (used for logging only)
         delta_concentration: Change in pollutant concentration per tract
-        inputs: AnalysisInputs providing preterm birth baseline data
-        params: Dict with preterm_birth_odds_ratio and monetary_value_per_ptb
+        inputs: AnalysisInputs providing preterm birth baseline data and optional
+            ``preterm_birth_odds_ratio`` and ``monetary_value_per_ptb`` (set via
+            ``set_preterm_birth_economic_parameters``).
 
     Returns:
         List of EconomicBenefit objects, or None if data/params are unavailable.
     """
     logger.debug(f"Running preterm birth pipeline for scenario {spec.scenario_id}")
 
-    odds_ratio = params.get('preterm_birth_odds_ratio')
-    monetary_value = params.get('monetary_value_per_ptb')
+    odds_ratio = inputs.preterm_birth_odds_ratio
+    monetary_value = inputs.monetary_value_per_ptb
 
     if odds_ratio is None or monetary_value is None or inputs.preterm_birth_core is None:
         logger.debug(

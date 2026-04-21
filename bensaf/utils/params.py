@@ -10,8 +10,6 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from bensaf.core.mortality_functions import MortalityFunctionLibrary
-
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / 'data'
@@ -45,37 +43,15 @@ def load_saf_blend_parameters(path: Optional[Path] = None) -> List[float]:
         return default_coeffs
 
 
-def load_economic_parameters(path: Optional[Path] = None) -> Dict[str, Any]:
-    """
-    Load economic parameters from JSON.
+def mortality_functions_json_path(path: Optional[Path] = None) -> Path:
+    return Path(path) if path is not None else _DEFAULT_DATA_DIR / "mortality_functions.json"
 
-    Returns:
-        Dict with keys: per_capita_consumption, life_years_gained,
-        preterm_birth_odds_ratio, monetary_value_per_ptb
-    """
-    if path is None:
-        path = _DEFAULT_DATA_DIR / 'economic_parameters.json'
 
-    defaults: Dict[str, Any] = {
-        'per_capita_consumption': None,
-        'life_years_gained': 10.0,
-        'preterm_birth_odds_ratio': None,
-        'monetary_value_per_ptb': None,
-    }
-
-    if not path.exists():
-        logger.warning(f"Economic parameters file not found at {path}, using defaults")
-        return defaults
-
-    try:
-        with open(path, 'r') as f:
-            data = json.load(f)
-        params = {**defaults, **data}
-        logger.info(f"Loaded economic parameters from {path}")
-        return params
-    except Exception as e:
-        logger.warning(f"Error loading economic parameters: {e}, using defaults")
-        return defaults
+def load_mortality_functions(path: Optional[Path] = None) -> Dict[int, Dict[str, Any]]:
+    p = mortality_functions_json_path(path)
+    with open(p, encoding="utf-8") as f:
+        raw = json.load(f)
+    return {int(k): v for k, v in raw.items()}
 
 
 def load_mortality_function_config(
@@ -92,15 +68,14 @@ def load_mortality_function_config(
     Returns:
         Dict with keys: title, mean_rr, lower_rr, upper_rr, unit_increase
     """
-    library = MortalityFunctionLibrary(json_path=path)
+    functions = load_mortality_functions(path)
 
     if function_id is None:
-        functions = library.list_functions()
         if not functions:
             raise ValueError("No mortality functions available")
-        function_id = functions[0]['id']
+        function_id = min(functions.keys())
 
-    function_data = library.get_function(function_id)
+    function_data = functions.get(function_id)
     if function_data is None:
         raise ValueError(f"Mortality function {function_id} not found")
 

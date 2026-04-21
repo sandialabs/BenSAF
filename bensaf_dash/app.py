@@ -13,8 +13,8 @@ from bensaf_dash.callbacks import workflow_callbacks
 
 app = dash.Dash(
     __name__,
-    external_stylesheets=[dbc.themes.BOOTSTRAP],
-    suppress_callback_exceptions=True
+    external_stylesheets=[dbc.themes.FLATLY, dbc.icons.BOOTSTRAP],
+    suppress_callback_exceptions=True,
 )
 
 app.title = "BenSAF - Benefits of Sustainable Aviation Fuels"

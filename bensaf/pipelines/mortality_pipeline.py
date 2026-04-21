@@ -25,7 +25,6 @@ def run_mortality_pipeline(
     delta_concentration: pd.Series,
     inputs: AnalysisInputs,
     mortality_function_params: Dict[str, Any],
-    econ_params: Dict[str, Any],
 ) -> Optional[Tuple[HealthImpact, Optional[EconomicBenefit]]]:
     """
     Compute mortality health impacts and optional economic benefit.
@@ -33,9 +32,10 @@ def run_mortality_pipeline(
     Args:
         spec: ScenarioSpec (used for logging only)
         delta_concentration: Change in pollutant concentration per tract
-        inputs: AnalysisInputs providing incidence and demographics
+        inputs: AnalysisInputs providing incidence and demographics; optional
+            ``economic_core`` (from ``load_mortality_economic_tract_data``) with
+            ``per_capita_consumption`` and optional ``life_years_gained`` per tract.
         mortality_function_params: Dict with mean_rr, lower_rr, upper_rr, unit_increase
-        econ_params: Dict with per_capita_consumption, life_years_gained
 
     Returns:
         (HealthImpact, EconomicBenefit or None), or None if mortality_rate is unavailable.
@@ -83,18 +83,29 @@ def run_mortality_pipeline(
     logger.debug("Computed mortality impacts")
 
     econ_benefit: Optional[EconomicBenefit] = None
-    per_capita = econ_params.get('per_capita_consumption')
-    life_years = econ_params.get('life_years_gained', 10.0)
 
-    if per_capita is not None:
+    default_life_years = 10.0
+    per_capita_tract: Optional[pd.Series] = None
+    life_years_tract: Optional[pd.Series] = None
+    if inputs.economic_core is not None and 'per_capita_consumption' in inputs.economic_core.columns:
+        per_capita_tract = inputs.economic_core['per_capita_consumption'].reindex(common_index)
+        if 'life_years_gained' in inputs.economic_core.columns:
+            life_years_tract = inputs.economic_core['life_years_gained'].reindex(common_index)
+
+    if per_capita_tract is not None and per_capita_tract.notna().any():
+        per_capita_use = per_capita_tract
+        if life_years_tract is not None and life_years_tract.notna().any():
+            life_years_use = life_years_tract.fillna(default_life_years)
+        else:
+            life_years_use = default_life_years
         mean_val = calculate_mortality_economic_value(
-            impact.attributable_cases.mean, per_capita, life_years
+            impact.attributable_cases.mean, per_capita_use, life_years_use
         )
         lower_val = calculate_mortality_economic_value(
-            impact.attributable_cases.lower, per_capita, life_years
+            impact.attributable_cases.lower, per_capita_use, life_years_use
         )
         upper_val = calculate_mortality_economic_value(
-            impact.attributable_cases.upper, per_capita, life_years
+            impact.attributable_cases.upper, per_capita_use, life_years_use
         )
         econ_benefit = EconomicBenefit(
             name='mortality_economic_value',
@@ -102,6 +113,8 @@ def run_mortality_pipeline(
         )
         logger.debug("Computed mortality economic benefit")
     else:
-        logger.debug("per_capita_consumption not configured, skipping mortality economic benefit")
+        logger.debug(
+            "No tract-level per_capita_consumption on inputs; skipping mortality economic benefit"
+        )
 
     return impact, econ_benefit

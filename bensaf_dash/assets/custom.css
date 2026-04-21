@@ -1,0 +1,41 @@
+.bensaf-upload-zone {
+  width: 100%;
+  min-height: 72px;
+  padding: 1rem 0.75rem;
+  border: 2px dashed var(--bs-secondary);
+  border-radius: 0.5rem;
+  text-align: center;
+  background-color: var(--bs-light);
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bensaf-upload-zone:hover {
+  border-color: var(--bs-primary);
+  background-color: rgba(var(--bs-primary-rgb), 0.07);
+  box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.05);
+}
+
+/* Tab strip: pill-like links (dbc.Tabs v2 has no pills= prop) */
+.bensaf-tabs .nav-link {
+  border-radius: 2rem;
+  margin-right: 0.25rem;
+  padding: 0.4rem 1rem;
+}
+
+.bensaf-tabs .nav-link.active {
+  font-weight: 600;
+}
+
+.bensaf-step-circle {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
