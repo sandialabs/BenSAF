@@ -84,7 +84,7 @@ class AnalysisInputs:
     - baseline_exposure: DataFrame, GEOID (int) index, pollutant columns
     - incidence: DataFrame, GEOID (int) index, incidence rate columns
     - preterm_birth_core: DataFrame, GEOID (int) index, 'baseline_preterm_births' column
-    - economic_core: DataFrame, GEOID (int) index, 'per_capita_consumption' for tract mortality valuation
+    - economic_core: DataFrame, GEOID (int) index, 'per_capita_expenditure' for tract mortality valuation
 
     Optional preterm birth economics (no file): set via ``set_preterm_birth_economic_parameters``.
 
@@ -307,24 +307,24 @@ class AnalysisInputs:
         """
         Load tract-level inputs for mortality economic valuation.
 
-        Required column: ``per_capita_consumption``. Optional: ``life_years_gained`` per tract;
+        Required column: ``per_capita_expenditure``. Optional: ``life_years_gained`` per tract;
         if omitted, a default of 10.0 life years per tract is used when computing benefits.
         """
-        self.logger.info("Loading tract-level mortality economic data")
+        self.logger.info("Loading tract-level per-capita expenditure data for mortality valuation")
 
         if self.tract_geometries is None:
             raise ValueError("Tract geometries must be loaded first")
 
         economic_df = economic_df.copy()
 
-        if 'per_capita_consumption' not in economic_df.columns:
-            raise ValueError("Economic tract data must contain 'per_capita_consumption'")
+        if 'per_capita_expenditure' not in economic_df.columns:
+            raise ValueError("Economic tract data must contain 'per_capita_expenditure'")
 
         economic_df = validate_geoid_alignment(
-            economic_df, self.tract_geometries, "mortality economic tract data"
+            economic_df, self.tract_geometries, "per capita expenditure tract data"
         )
 
-        core_columns = ['per_capita_consumption']
+        core_columns = ['per_capita_expenditure']
         if 'life_years_gained' in economic_df.columns:
             core_columns.append('life_years_gained')
 
@@ -336,7 +336,7 @@ class AnalysisInputs:
         )
         self._economic = economic_df
         self.logger.info(
-            f"Loaded mortality economic data: {len(core_columns)} core column(s), "
+            f"Loaded per-capita expenditure data: {len(core_columns)} core column(s), "
             f"{len(covariate_columns)} other column(s)"
         )
 
@@ -447,7 +447,10 @@ class AnalysisResults:
         if inputs.economic_core is not None:
             merged = merged.join(inputs.economic_core, how='left')
         if not core_only and inputs.economic_covariates is not None:
-            merged = merged.join(inputs.economic_covariates, how='left')
+            econ_cov = inputs.economic_covariates
+            new_econ_cols = [c for c in econ_cov.columns if c not in merged.columns]
+            if new_econ_cols:
+                merged = merged.join(econ_cov[new_econ_cols], how='left')
 
         for result in self.scenarios.values():
             scenario_df = result.to_dataframe()

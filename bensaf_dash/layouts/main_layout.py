@@ -5,6 +5,47 @@ Main layout for BenSAF Dash application
 from dash import dcc, html
 import dash_bootstrap_components as dbc
 
+
+def create_sidebar_nav():
+    """Workflow navigation only; readiness is shown under Execute Analysis (prerequisites)."""
+    nav_btn = "bensaf-nav-link-btn text-start px-2 py-2 w-100 rounded-2 border-0 shadow-none mb-1"
+
+    return html.Div(
+        [
+            html.H6("Workflow", className="text-uppercase small text-muted mb-2"),
+            dbc.Button(
+                "Data",
+                id="nav-tab-data",
+                n_clicks=0,
+                color="link",
+                className=nav_btn,
+            ),
+            dbc.Button(
+                "Explore",
+                id="nav-tab-explore",
+                n_clicks=0,
+                color="link",
+                className=nav_btn,
+            ),
+            dbc.Button(
+                "Configuration",
+                id="nav-tab-configuration",
+                n_clicks=0,
+                color="link",
+                className=nav_btn,
+            ),
+            dbc.Button(
+                "Results",
+                id="nav-tab-results",
+                n_clicks=0,
+                color="link",
+                className=nav_btn,
+            ),
+        ],
+        className="bensaf-sidebar-nav mb-3",
+    )
+
+
 def create_layout():
     return dbc.Container(
         [
@@ -14,140 +55,317 @@ def create_layout():
                         [
                             html.Div(
                                 [
-                                    html.Span("BenSAF", className="fw-bold text-primary fs-2"),
-                                    html.Span(" Dashboard", className="text-body fs-2"),
+                                    html.Button(
+                                        html.Img(
+                                            src="/assets/BenSAF.png",
+                                            alt="BenSAF",
+                                            className="bensaf-logo-img",
+                                        ),
+                                        id="nav-logo-overview",
+                                        n_clicks=0,
+                                        type="button",
+                                        title="Overview",
+                                        className="bensaf-logo-btn p-0 border-0 bg-transparent w-100 text-start mb-2",
+                                    ),
                                 ],
-                                className="d-flex align-items-baseline flex-wrap",
+                                className="bensaf-sidebar-brand",
                             ),
-                            html.P(
-                                "Benefits of Sustainable Aviation Fuels · health impact analysis",
-                                className="text-muted mb-0 mt-1 small",
+                            create_sidebar_nav(),
+                            create_header(),
+                        ],
+                        xs=12,
+                        lg=3,
+                        xl=3,
+                        className="bensaf-sidebar pb-3 pb-lg-0 pe-lg-3",
+                    ),
+                    dbc.Col(
+                        [
+                            html.Div(id="panel-overview", children=[create_overview_tab()]),
+                            html.Div(
+                                id="panel-data",
+                                children=[create_data_tab()],
+                                style={"display": "none"},
+                            ),
+                            html.Div(
+                                id="panel-explore",
+                                children=[create_explore_tab()],
+                                style={"display": "none"},
+                            ),
+                            html.Div(
+                                id="panel-configuration",
+                                children=[create_configuration_tab()],
+                                style={"display": "none"},
+                            ),
+                            html.Div(
+                                id="panel-results",
+                                children=[create_results_tab()],
+                                style={"display": "none"},
                             ),
                         ],
+                        xs=12,
+                        lg=9,
+                        xl=9,
+                        className="ps-lg-3 bensaf-main-panels",
                     ),
                 ],
-                className="mb-3 pb-3 border-bottom",
+                className="align-items-lg-start g-lg-4",
             ),
-            create_header(),
-            dbc.Tabs(
-                [
-                    dbc.Tab(label="Data", tab_id="tab-data", children=[create_data_tab()]),
-                    dbc.Tab(
-                        label="Configuration",
-                        tab_id="tab-configuration",
-                        children=[create_configuration_tab()],
-                    ),
-                    dbc.Tab(label="Results", tab_id="tab-results", children=[create_results_tab()]),
-                ],
-                id="tabs",
-                active_tab="tab-data",
-                className="mb-3 bensaf-tabs",
-            ),
+            dcc.Store(id="active-tab", data="tab-overview"),
             dcc.Store(id="workflow-state", data={}),
             dcc.Store(id="analysis-results", data={}),
-            dcc.Store(id="case-studies-init", data={"init": True}),
+            dcc.Store(id="case_studies-init", data={"init": True}),
             dcc.Store(id="data-config", data={"aermod_crs": "EPSG:4326"}),
         ],
-        fluid=True,
-        className="py-3",
+        fluid=False,
+        className="py-3 bensaf-app-root",
+    )
+
+
+def create_overview_tab():
+    """Landing tab: short stakeholder overview and how BenSAF relates to AERMOD, NAS/TRB, and BenMAP."""
+    stages = [
+        (
+            "Load and preview",
+            "Bring in your airport-area case study or use the example, then preview inputs on a map or table.",
+        ),
+        (
+            "Set scenarios",
+            "Choose SAF blend levels to compare; the sidebar shows when everything is ready to run.",
+        ),
+        (
+            "See results",
+            "Run the analysis, then review maps and exports for briefings or reports.",
+        ),
+    ]
+    items = [
+        dbc.ListGroupItem(
+            [
+                html.H5(title, className="mb-1 fs-6"),
+                html.P(text, className="mb-0 text-muted small"),
+            ],
+            className="py-2 px-3",
+        )
+        for title, text in stages
+    ]
+
+    method_cards = dbc.Row(
+        [
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader(html.H6("AERMOD", className="mb-0 small")),
+                        dbc.CardBody(
+                            html.P(
+                                "Baseline air pollution: concentrations communities experience before SAF-driven changes, "
+                                "often supported by dispersion modeling.",
+                                className="small text-muted mb-0",
+                            ),
+                            className="py-2",
+                        ),
+                    ],
+                    className="h-100 shadow-sm border-0",
+                ),
+                md=4,
+                className="mb-2",
+            ),
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader(
+                            html.H6("NAS / TRB", className="mb-0 small"),
+                        ),
+                        dbc.CardBody(
+                            html.P(
+                                "Pollutant reduction from SAF blends follow Excel-based methods released by the "
+                                "National Academies and Transportation Research Board (NAS/TRB).",
+                                className="small text-muted mb-0",
+                            ),
+                            className="py-2",
+                        ),
+                    ],
+                    className="h-100 shadow-sm border-0",
+                ),
+                md=4,
+                className="mb-2",
+            ),
+            dbc.Col(
+                dbc.Card(
+                    [
+                        dbc.CardHeader(html.H6("BenMAP", className="mb-0 small")),
+                        dbc.CardBody(
+                            html.P(
+                                "Health and economic benefits use a BenMAP-like procedure: changes in concentration drive "
+                                "health impacts, which can optionally be converted to economic impact when the necessary "
+                                "economic inputs are provided.",
+                                className="small text-muted mb-0",
+                            ),
+                            className="py-2",
+                        ),
+                    ],
+                    className="h-100 shadow-sm border-0",
+                ),
+                md=4,
+                className="mb-2",
+            ),
+        ],
+        className="g-2 mt-0",
+    )
+
+    return html.Div(
+        [
+            html.H3("Overview", className="mt-2 mb-2 fs-4"),
+            html.P(
+                "BenSAF is an analytical and visualization tool for estimating the health and economic benefits that "
+                "could result from the use of sustainable aviation fuel (SAF). Click the logo to return here; use the "
+                "sidebar for Data, Explore, Configuration, and Results.",
+                className="text-muted small mb-2",
+            ),
+            html.H5("Using this dashboard", className="fs-6 mb-1 text-body"),
+            dbc.ListGroup(items, flush=True, className="border rounded shadow-sm mb-2"),
+            html.H5("Analytical backbone", className="fs-6 mb-1 text-body"),
+            html.P(
+                "BenSAF follows an integrated multi-step procedure established in literature, which includes methods "
+                "from AERMOD, NAS/TRB, and BenMAP.",
+                className="text-muted small mb-2",
+            ),
+            method_cards,
+        ],
+        className="pt-0 pb-2",
     )
 
 
 def create_header():
-    """Header: workflow steps, readiness checklist, run controls."""
-    step_wrap = "text-center px-1"
+    """Run control first, then prerequisites (sole readiness checklist for Execute Analysis)."""
+    inner = [
+        dbc.Row(
+            [
+                dbc.Col(
+                    [
+                        dbc.Button(
+                            "Execute Analysis",
+                            id="btn-run-analysis",
+                            color="primary",
+                            size="md",
+                            className="w-100",
+                            disabled=True,
+                        ),
+                        html.Div(id="analysis-status", className="small text-muted mt-2"),
+                        dcc.Loading(
+                            id="loading-analysis",
+                            type="circle",
+                            children=html.Div(id="loading-output"),
+                        ),
+                    ],
+                    width=12,
+                ),
+            ],
+            className="g-2 align-items-start",
+        ),
+        dbc.Row(
+            [
+                dbc.Col(
+                    [
+                        html.H6("Prerequisites", className="mb-2 mt-3 text-uppercase small text-muted"),
+                        html.Div(
+                            id="analysis-prerequisites-checklist",
+                            className="small p-2 rounded bg-light border",
+                        ),
+                    ],
+                    width=12,
+                    className="mb-0",
+                ),
+            ],
+            className="g-2 align-items-start",
+        ),
+    ]
     return dbc.Card(
         [
-            dbc.CardBody(
+            dbc.CardBody(inner, className="p-3"),
+        ],
+        className="mb-0 shadow-sm border-0 bg-light",
+    )
+
+
+def create_explore_tab():
+    """Map and table preview of merged inputs (requires data loaded on the Data tab)."""
+    return html.Div(
+        [
+            dbc.Row(
                 [
-                    dbc.Row(
+                    dbc.Col(
                         [
-                            dbc.Col(
+                            html.H3("Explore", className="mt-4 mb-3"),
+                            html.P(
+                                "Preview merged tract data on a map or in a table. Load inputs on the Data tab "
+                                "(uploads or example case study) first.",
+                                className="text-muted mb-3",
+                            ),
+                            html.Label("Select Variable to Display", className="fw-bold"),
+                            dcc.Dropdown(
+                                id="data-viewer-dropdown",
+                                options=[],
+                                value=None,
+                                clearable=False,
+                                placeholder="Select a variable...",
+                                className="mb-3",
+                            ),
+                            dbc.Tabs(
                                 [
-                                    html.H6("Workflow", className="mb-3 text-uppercase small text-muted"),
-                                    dbc.Row(
-                                        [
-                                            dbc.Col(
-                                                [
-                                                    html.Div(id="step-data-icon", className="mb-1 d-flex justify-content-center"),
-                                                    html.P("Data", className=f"{step_wrap} small text-muted mb-0"),
+                                    dbc.Tab(
+                                        label="Map",
+                                        tab_id="data-explorer-map",
+                                        children=[
+                                            dcc.Loading(
+                                                id="loading-data-viewer-map",
+                                                type="circle",
+                                                children=[
+                                                    dcc.Graph(
+                                                        id="data-viewer-map",
+                                                        config={"displayModeBar": True, "scrollZoom": True},
+                                                        style={"height": "380px"},
+                                                    )
                                                 ],
-                                                xs=3,
-                                            ),
-                                            dbc.Col(
-                                                [
-                                                    html.Div(id="step-config-icon", className="mb-1 d-flex justify-content-center"),
-                                                    html.P("Config", className=f"{step_wrap} small text-muted mb-0"),
-                                                ],
-                                                xs=3,
-                                            ),
-                                            dbc.Col(
-                                                [
-                                                    html.Div(id="step-analysis-icon", className="mb-1 d-flex justify-content-center"),
-                                                    html.P("Analysis", className=f"{step_wrap} small text-muted mb-0"),
-                                                ],
-                                                xs=3,
-                                            ),
-                                            dbc.Col(
-                                                [
-                                                    html.Div(id="step-results-icon", className="mb-1 d-flex justify-content-center"),
-                                                    html.P("Results", className=f"{step_wrap} small text-muted mb-0"),
-                                                ],
-                                                xs=3,
                                             ),
                                         ],
-                                        className="g-0",
+                                    ),
+                                    dbc.Tab(
+                                        label="Data table",
+                                        tab_id="data-explorer-table",
+                                        children=[
+                                            html.P("First 100 records", className="text-muted small mb-2"),
+                                            dcc.Loading(
+                                                id="loading-data-table",
+                                                type="circle",
+                                                children=[
+                                                    html.Div(
+                                                        id="data-viewer-table",
+                                                        style={
+                                                            "height": "420px",
+                                                            "overflowY": "auto",
+                                                            "overflowX": "auto",
+                                                        },
+                                                    )
+                                                ],
+                                            ),
+                                        ],
                                     ),
                                 ],
-                                xs=12,
-                                lg=4,
-                                className="mb-3 mb-lg-0",
-                            ),
-                            dbc.Col(
-                                [
-                                    html.H6("Readiness", className="mb-2 text-uppercase small text-muted"),
-                                    html.Div(
-                                        id="analysis-prerequisites-checklist",
-                                        className="small p-2 rounded bg-light border",
-                                    ),
-                                ],
-                                xs=12,
-                                lg=5,
-                                className="mb-3 mb-lg-0",
-                            ),
-                            dbc.Col(
-                                [
-                                    html.H6("Run", className="mb-2 text-uppercase small text-muted"),
-                                    dbc.Button(
-                                        "Execute Analysis",
-                                        id="btn-run-analysis",
-                                        color="primary",
-                                        size="sm",
-                                        className="w-100 mb-2",
-                                        disabled=True,
-                                    ),
-                                    html.Div(id="analysis-status", className="small text-muted"),
-                                    dcc.Loading(
-                                        id="loading-analysis",
-                                        type="circle",
-                                        children=html.Div(id="loading-output"),
-                                    ),
-                                ],
-                                xs=12,
-                                lg=3,
+                                id="data-explorer-tabs",
+                                active_tab="data-explorer-map",
+                                className="mb-0",
                             ),
                         ],
-                        className="g-3 align-items-start",
-                    ),
-                ],
+                        md=12,
+                    )
+                ]
             ),
         ],
-        className="mb-4 shadow-sm border-0",
+        className="pt-1 pb-4",
     )
 
 
 def create_data_tab():
-    """Data tab: file upload vs example case study, accordion inputs, data explorer."""
+    """Data tab: file upload vs example case study, accordion inputs."""
     return html.Div([
         dbc.Row([
             dbc.Col([
@@ -164,37 +382,54 @@ def create_data_tab():
                 html.H4("File Upload", className="mb-3"),
                 dbc.Accordion([
                     dbc.AccordionItem([
-                        html.Label("Census Tract Geometries (GeoJSON, Shapefile, or GeoPackage)", className="fw-bold"),
-                        html.Small("Must contain GEOID and geometry columns only", className="text-muted d-block mb-2"),
+                        html.P([html.Strong("Data type: "), "Vector parcel boundaries (GeoJSON, Shapefile, or GeoPackage)."], className="mb-1 small"),
+                        html.P([html.Strong("Required fields: "), "GEOID and geometry; keep attribute columns minimal."], className="mb-1 small"),
+                        html.P(
+                            [html.Strong("Role in analysis: "), "Defines tract polygons for spatial joins, mapping, and alignment of all tabular inputs."],
+                            className="mb-3 small text-muted",
+                        ),
                         dcc.Upload(
                             id='upload-tracts',
                             children=html.Div([
                                 'Drag and Drop or ',
-                                html.A('Select Tract Geometries File')
+                                html.A('Select file')
                             ]),
                             className="bensaf-upload-zone",
                             multiple=False
                         ),
                         html.Div(id='upload-tracts-status', className="text-muted mt-2"),
-                    ], title="1. Census Tract Geometries", item_id="item-tracts"),
+                    ], title="Case Study Boundary", item_id="item-tracts"),
                     
                     dbc.AccordionItem([
-                        html.Label("Demographics Data (CSV)", className="fw-bold"),
-                        html.Small("Must contain GEOID and demographic columns (population, etc.)", className="text-muted d-block mb-2"),
+                        html.P([html.Strong("Data type: "), "Tabular (CSV), one row per census tract."], className="mb-1 small"),
+                        html.P([html.Strong("Required fields: "), "GEOID; include population and other covariates used by the health pipelines."], className="mb-1 small"),
+                        html.P(
+                            [html.Strong("Role in analysis: "), "Population weighting and demographic context for incidence and impact calculations."],
+                            className="mb-3 small text-muted",
+                        ),
                         dcc.Upload(
                             id='upload-demographics',
                             children=html.Div([
                                 'Drag and Drop or ',
-                                html.A('Select Demographics File')
+                                html.A('Select file')
                             ]),
                             className="bensaf-upload-zone",
                             multiple=False
                         ),
                         html.Div(id='upload-demographics-status', className="text-muted mt-2"),
-                    ], title="2. Demographics Data", item_id="item-demographics"),
+                    ], title="Demographics", item_id="item-demographics"),
                     
                     dbc.AccordionItem([
-                        html.Label("Exposure Data Source", className="fw-bold mb-2"),
+                        html.P([html.Strong("Data type: "), "Gridded or tabular baseline pollutant concentrations per tract; upload CSV or build from AERMOD .ADO outputs."], className="mb-1 small"),
+                        html.P(
+                            [html.Strong("Required fields: "), "CSV: GEOID and a concentration column (e.g. ufp / baseline_pollutant_concentration). AERMOD: weighted .ADO files and CRS as described below."],
+                            className="mb-1 small",
+                        ),
+                        html.P(
+                            [html.Strong("Role in analysis: "), "Baseline exposure merged to tracts; combined with SAF blend reduction to estimate concentration changes under each scenario."],
+                            className="mb-3 small text-muted",
+                        ),
+                        html.Label("Source", className="fw-bold mb-2 small"),
                         dcc.RadioItems(
                             id='exposure-source-radio',
                             options=[
@@ -206,12 +441,11 @@ def create_data_tab():
                         ),
                         
                         html.Div(id='exposure-csv-upload', children=[
-                            html.Label("Exposure Data (CSV)", className="fw-bold"),
                             dcc.Upload(
                                 id='upload-exposure',
                                 children=html.Div([
                                     'Drag and Drop or ',
-                                    html.A('Select Exposure Data File')
+                                    html.A('Select file')
                                 ]),
                                 className="bensaf-upload-zone",
                                 multiple=False
@@ -291,119 +525,70 @@ def create_data_tab():
                             ),
                             html.Div(id='generate-exposure-status', className="mt-2"),
                         ]),
-                    ], title="3. Exposure Data", item_id="item-exposure"),
+                    ], title="Baseline Pollutant Exposure", item_id="item-exposure"),
                     
                     dbc.AccordionItem([
+                        html.P([html.Strong("Data type: "), "Tabular (CSV), one row per census tract."], className="mb-1 small"),
                         html.P(
-                            "Select and configure health benefit pipelines. Each pipeline has specific data requirements.",
-                            className="text-muted mb-3",
+                            [html.Strong("Required fields: "), "GEOID and mortality_rate."],
+                            className="mb-1 small",
+                        ),
+                        html.P(
+                            [html.Strong("Role in analysis: "), "Baseline incidence drives attributable mortality cases in the health pipeline."],
+                            className="mb-3 small text-muted",
                         ),
                         dbc.Card([
                             dbc.CardHeader([
                                 html.Div([
-                                    html.H5("Mortality Pipeline", className="mb-0 d-inline"),
+                                    html.H5("Mortality", className="mb-0 d-inline"),
                                     html.Span(id='mortality-pipeline-status', className="ms-2"),
                                 ])
                             ], className="bg-light"),
                             dbc.CardBody([
                                 html.P(
-                                    "Computes mortality health impacts and economic benefits from pollutant reduction.",
-                                    className="text-muted mb-3",
-                                ),
-                                html.H6("Required Data", className="fw-bold mt-3 mb-2"),
-                                html.Ul([
-                                    html.Li("Incidence data with 'mortality_rate' column (CSV)"),
-                                    html.Li("Demographics data with 'population' column (already uploaded)"),
-                                ], className="mb-3"),
-                                html.H6("Configuration", className="fw-bold mt-3 mb-2"),
-                                html.Ul([
-                                    html.Li("Mortality function: Selected in Configuration tab"),
-                                    html.Li(
-                                        "Mortality economics (optional): CSV with GEOID and "
-                                        "per_capita_consumption; optional life_years_gained. "
-                                        "Included when you load the ORD example; or upload below."
-                                    ),
-                                ], className="mb-3"),
-                                html.Label("Upload Incidence Data (CSV)", className="fw-bold"),
-                                html.Small(
-                                    "Must contain GEOID and mortality_rate columns",
-                                    className="text-muted d-block mb-2",
+                                    [
+                                        html.Strong("Analysis note: "),
+                                        "Mortality impacts use the Bouma et al. concentration–response parameters by default.",
+                                    ],
+                                    className="small text-muted mb-3",
                                 ),
                                 dcc.Upload(
                                     id='upload-mortality-incidence',
                                     children=html.Div([
                                         'Drag and Drop or ',
-                                        html.A('Select Incidence Data File'),
+                                        html.A('Select incidence CSV'),
                                     ]),
                                     className="bensaf-upload-zone",
                                     multiple=False,
                                 ),
                                 html.Div(id='upload-mortality-incidence-status', className="text-muted mt-2"),
-                                html.Label(
-                                    "Upload mortality economic tract data (CSV, optional)",
-                                    className="fw-bold mt-3",
-                                ),
-                                html.Small(
-                                    "GEOID, per_capita_consumption; optional life_years_gained",
-                                    className="text-muted d-block mb-2",
-                                ),
-                                dcc.Upload(
-                                    id='upload-mortality-economic',
-                                    children=html.Div([
-                                        "Drag and Drop or ",
-                                        html.A("Select economic tract CSV"),
-                                    ]),
-                                    className="bensaf-upload-zone",
-                                    multiple=False,
-                                ),
-                                html.Div(
-                                    id="upload-mortality-economic-status",
-                                    className="text-muted mt-2",
-                                ),
-                            ]),
-                        ], className="mb-3 shadow-sm border-0"),
-                        dbc.Card([
-                            dbc.CardHeader([
-                                html.Div([
-                                    html.H5("Preterm Birth Pipeline", className="mb-0 d-inline"),
-                                    html.Span(id='preterm-birth-pipeline-status', className="ms-2"),
-                                ])
-                            ], className="bg-light"),
-                            dbc.CardBody([
-                                html.P(
-                                    "Computes reduction in preterm births and economic benefits from UFP reduction.",
-                                    className="text-muted mb-3",
-                                ),
-                                html.H6("Required Data", className="fw-bold mt-3 mb-2"),
-                                html.Ul([
-                                    html.Li("Preterm birth data with 'baseline_preterm_births' column (CSV)"),
-                                    html.Li("Demographics data with 'population' column (already uploaded)"),
-                                ], className="mb-3"),
-                                html.H6("Configuration", className="fw-bold mt-3 mb-2"),
-                                html.Ul([
-                                    html.Li(
-                                        "Odds ratio and monetary value per PtB: set on AnalysisInputs "
-                                        "via the API (e.g. set_preterm_birth_economic_parameters)."
-                                    ),
-                                ], className="mb-3"),
-                                html.Label("Upload Preterm Birth Data (CSV)", className="fw-bold"),
-                                html.Small(
-                                    "Must contain GEOID and baseline_preterm_births columns",
-                                    className="text-muted d-block mb-2",
-                                ),
-                                dcc.Upload(
-                                    id='upload-ptb-data',
-                                    children=html.Div([
-                                        'Drag and Drop or ',
-                                        html.A('Select Preterm Birth Data File'),
-                                    ]),
-                                    className="bensaf-upload-zone",
-                                    multiple=False,
-                                ),
-                                html.Div(id='upload-ptb-status', className="text-muted mt-2"),
                             ]),
                         ], className="mb-0 shadow-sm border-0"),
-                    ], title="4. Health Pipelines", item_id="item-health-pipelines"),
+                    ], title="Baseline Mortality Rate", item_id="item-health-pipelines"),
+                    dbc.AccordionItem([
+                        html.P([html.Strong("Data type: "), "Tabular (CSV), one row per census tract."], className="mb-1 small"),
+                        html.P(
+                            [html.Strong("Required fields: "), "GEOID and per_capita_expenditure. Optional: life_years_gained."],
+                            className="mb-1 small",
+                        ),
+                        html.P(
+                            [html.Strong("Role in analysis: "), "Tract-level expenditure supports monetized mortality benefits when you run scenarios."],
+                            className="mb-3 small text-muted",
+                        ),
+                        dcc.Upload(
+                            id='upload-mortality-economic',
+                            children=html.Div([
+                                "Drag and Drop or ",
+                                html.A("Select per-capita expenditure CSV"),
+                            ]),
+                            className="bensaf-upload-zone",
+                            multiple=False,
+                        ),
+                        html.Div(
+                            id="upload-mortality-economic-status",
+                            className="text-muted mt-2",
+                        ),
+                    ], title="Per-capita expenditure (optional)", item_id="item-per-capita-expenditure"),
                 ], start_collapsed=False),
             ], md=6),
             
@@ -439,110 +624,37 @@ def create_data_tab():
                 ),
             ], md=6),
         ]),
-        
-        html.Hr(className="my-4"),
-        
-        dbc.Row([
-            dbc.Col([
-                html.H4("Data Explorer", className="mt-4 mb-3"),
-                html.Label("Select Variable to Display", className="fw-bold"),
-                dcc.Dropdown(
-                    id='data-viewer-dropdown',
-                    options=[],
-                    value=None,
-                    clearable=False,
-                    placeholder="Select a variable...",
-                    className="mb-3"
+        dbc.Row(
+            [
+                dbc.Col(
+                    [
+                        html.P(
+                            [
+                                "After inputs are loaded, open the ",
+                                html.Strong("Explore"),
+                                " tab to map or tabulate merged variables.",
+                            ],
+                            className="text-muted small mt-3 mb-0",
+                        ),
+                    ],
+                    md=12,
                 ),
-            ], md=12)
-        ]),
-        
-        dbc.Row([
-            dbc.Col([
-                html.H5("Map", className="mb-2"),
-                dcc.Loading(
-                    id="loading-data-viewer-map",
-                    type="circle",
-                    children=[
-                        dcc.Graph(
-                            id='data-viewer-map',
-                            config={'displayModeBar': True, 'scrollZoom': True},
-                            style={'height': '600px'}
-                        )
-                    ]
-                ),
-            ], md=7),
-            
-            dbc.Col([
-                html.H5("Data table", className="mb-2"),
-                html.P("First 100 records", className="text-muted small mb-2"),
-                dcc.Loading(
-                    id="loading-data-table",
-                    type="circle",
-                    children=[
-                        html.Div(
-                            id='data-viewer-table',
-                            style={
-                                'height': '580px',
-                                'overflowY': 'auto',
-                                'overflowX': 'auto'
-                            }
-                        )
-                    ]
-                ),
-            ], md=5)
-        ]),
-        
+            ]
+        ),
     ], className="pt-1 pb-4")
 
 def create_configuration_tab():
-    """Create configuration tab with health impact function and SAF scenarios"""
+    """SAF blend scenarios; mortality uses Bouma et al. by default."""
     return html.Div([
         dbc.Row([
             dbc.Col([
                 html.H3("Configuration", className="mt-4 mb-3"),
-                html.P("Configure health impact function parameters and SAF blend scenarios.", className="text-muted"),
+                html.P(
+                    "Define SAF blend scenarios to compare. Mortality impacts use the Bouma et al. model by default.",
+                    className="text-muted",
+                ),
             ])
         ]),
-        
-        dbc.Row([
-            dbc.Col([
-                dcc.Graph(
-                    id='health-impact-function-plot',
-                    config={'displayModeBar': True},
-                    style={'height': '400px'}
-                ),
-            ], md=5),
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H5("Health Impact Function", className="mb-0"), className="bg-light"),
-                    dbc.CardBody([
-                        dbc.Row([
-                            dbc.Col([
-                                html.Label("Select Mortality Function to View", className="fw-bold"),
-                                dcc.Dropdown(
-                                    id='mortality-function-dropdown',
-                                    options=[],
-                                    value=None,
-                                    clearable=False,
-                                    className="mb-3"
-                                ),
-                            ], md=12),
-                        ]),
-                        
-                        html.Div(id='mortality-function-details', className="mb-3"),
-                        
-                        html.Hr(className="my-3"),
-                        
-                        html.Label("Select Functions to Compute in Analysis", className="fw-bold mb-2"),
-                        html.Div(id='mortality-function-checkboxes', className="mb-3"),
-                        
-                        html.Div(id='config-status', className="mt-3")
-                    ])
-                ], className="mb-4 shadow-sm border-0"),
-            ], md=7)
-        ]),
-        
         dbc.Row([
             dbc.Col([
                 dbc.Card([
@@ -558,7 +670,8 @@ def create_configuration_tab():
                             size="sm",
                             className="mb-2"
                         ),
-                        html.Div(id='saf-scenarios-status', className="mt-2")
+                        html.Div(id='saf-scenarios-status', className="mt-2"),
+                        html.Div(id='config-status', className="mt-2"),
                     ])
                 ], className="mb-4 shadow-sm border-0"),
             ], md=6),
@@ -566,167 +679,147 @@ def create_configuration_tab():
                 dcc.Graph(
                     id='saf-reduction-curve',
                     config={'displayModeBar': True},
-                    style={'height': '500px'}
+                    style={'height': '400px'}
                 ),
             ], md=6)
         ]),
-        
-        dcc.Store(id='saf-scenarios-store', data=[25, 50]),
-        dcc.Store(id='selected-mortality-functions-store', data=[])
-        
+        dcc.Store(id='saf-scenarios-store', data=[]),
     ], className="pt-1 pb-4")
 
 
 
 def create_results_tab():
-    """Create enhanced results tab with summary cards and comparison charts"""
+    """Tract maps, table, and export."""
     return html.Div([
         dbc.Row([
             dbc.Col([
-                html.H3("Analysis Results", className="mt-4 mb-3"),
-                html.P("View and explore your analysis results", className="text-muted"),
+                html.H3("Results", className="mt-2 mb-1 fs-4"),
+                html.P(
+                    "Map results by census tract and scenario, or export tables for briefings and reports.",
+                    className="text-muted small mb-2",
+                ),
             ])
         ]),
-        
         dbc.Row([
             dbc.Col([
-                html.Div(id='results-summary-cards', className="mb-4")
-            ], md=12)
-        ]),
-
-        dbc.Row([
-            dbc.Col([
-                dbc.Card(
+                html.H5("Maps by census tract", className="mt-2 mb-2"),
+                dbc.Row(
                     [
-                        dbc.CardHeader(
-                            html.H5("Selected scenario — key metrics", className="mb-0"),
-                            className="bg-light",
+                        dbc.Col(
+                            [
+                                html.Label("SAF scenario", className="fw-bold small"),
+                                dcc.Dropdown(
+                                    id="results-scenario-dropdown",
+                                    options=[],
+                                    value=None,
+                                    clearable=False,
+                                    placeholder="Scenario…",
+                                    className="mb-2",
+                                ),
+                            ],
+                            md=6,
                         ),
-                        dbc.CardBody(html.Div(id="results-summary-table")),
+                        dbc.Col(
+                            [
+                                html.Label("Variable", className="fw-bold small"),
+                                dcc.Dropdown(
+                                    id="results-map-dropdown",
+                                    options=[],
+                                    value=None,
+                                    clearable=False,
+                                    placeholder="Variable…",
+                                    disabled=True,
+                                    className="mb-2",
+                                ),
+                            ],
+                            md=6,
+                        ),
                     ],
-                    className="mb-4 shadow-sm border-start border-primary border-4",
+                    className="g-2 align-items-end",
                 ),
-            ], md=12),
-        ]),
-        
-        dbc.Row([
-            dbc.Col([
-                dbc.Card([
-                    dbc.CardHeader(html.H5("Scenario Comparison", className="mb-0"), className="bg-light"),
-                    dbc.CardBody([
-                        dcc.Loading(
-                            id="loading-bar-chart",
-                            type="circle",
+                dbc.Tabs(
+                    [
+                        dbc.Tab(
+                            label="Map",
+                            tab_id="results-geo-map",
                             children=[
-                                dcc.Graph(
-                                    id='results-bar-chart',
-                                    config={'displayModeBar': True},
-                                    style={'height': '520px'}
-                                )
-                            ]
-                        )
-                    ])
-                ], className="mb-4 shadow-sm border-0")
-            ], md=12)
-        ]),
-        
-        dbc.Row([
-            dbc.Col([
-                html.H4("Geographic Visualization", className="mt-4 mb-3"),
-            ], md=12)
-        ]),
-        
-        dbc.Row([
-            dbc.Col([
-                html.Label("Select SAF Scenario", className="fw-bold"),
-                dcc.Dropdown(
-                    id='results-scenario-dropdown',
-                    options=[],
-                    value=None,
-                    clearable=False,
-                    placeholder="Select scenario...",
-                    className="mb-3"
+                                dcc.Loading(
+                                    id="loading-map",
+                                    type="circle",
+                                    children=[
+                                        dcc.Graph(
+                                            id="results-map",
+                                            config={"displayModeBar": True, "scrollZoom": True},
+                                            style={"height": "380px"},
+                                        )
+                                    ],
+                                ),
+                            ],
+                        ),
+                        dbc.Tab(
+                            label="Table",
+                            tab_id="results-geo-table",
+                            children=[
+                                dcc.Loading(
+                                    id="loading-results-table",
+                                    type="circle",
+                                    children=[
+                                        html.Div(
+                                            id="results-table",
+                                            style={
+                                                "height": "320px",
+                                                "overflowY": "auto",
+                                                "overflowX": "auto",
+                                            },
+                                        )
+                                    ],
+                                ),
+                            ],
+                        ),
+                    ],
+                    id="results-geo-tabs",
+                    active_tab="results-geo-map",
+                    className="mb-0",
                 ),
-            ], md=6),
-            dbc.Col([
-                html.Label("Select Result Variable", className="fw-bold"),
-                dcc.Dropdown(
-                    id='results-map-dropdown',
-                    options=[],
-                    value=None,
-                    clearable=False,
-                    placeholder="Select variable...",
-                    disabled=True,
-                    className="mb-3"
-                ),
-            ], md=6)
+            ], md=12),
         ]),
-        
-        dbc.Row([
-            dbc.Col([
-                html.H5("Map", className="mb-2"),
-                dcc.Loading(
-                    id="loading-map",
-                    type="circle",
-                    children=[
-                        dcc.Graph(
-                            id='results-map',
-                            config={'displayModeBar': True, 'scrollZoom': True},
-                            style={'height': '600px'}
-                        )
-                    ]
-                ),
-            ], md=7),
-            
-            dbc.Col([
-                html.H5("Detailed results table", className="mb-2"),
-                dcc.Loading(
-                    id="loading-results-table",
-                    type="circle",
-                    children=[
-                        html.Div(
-                            id='results-table',
-                            style={
-                                'height': '580px',
-                                'overflowY': 'auto',
-                                'overflowX': 'auto'
-                            }
-                        )
-                    ]
-                ),
-            ], md=5)
-        ]),
-
         dbc.Row([
             dbc.Col([
                 dbc.Card([
-                    dbc.CardHeader(html.H5("Export", className="mb-0"), className="bg-light"),
-                    dbc.CardBody([
-                        html.P(
-                            "Scenario summary matches the detailed results table. "
-                            "Tract-level CSV includes inputs and all scenario outputs (wide columns).",
-                            className="mb-3 text-body fw-semibold small",
-                        ),
-                        dbc.ButtonGroup([
-                            dbc.Button(
-                                "Summary table (CSV)",
-                                id="btn-export-results-summary-csv",
-                                color="primary",
-                                size="sm",
+                    dbc.CardHeader(
+                        html.H6("Export", className="mb-0 text-uppercase small text-muted"),
+                        className="py-2 bg-light border-0",
+                    ),
+                    dbc.CardBody(
+                        className="py-2",
+                        children=[
+                            html.P(
+                                "Summary CSV matches the scenario table; tract CSV adds geometry-linked columns.",
+                                className="small text-muted mb-2 mb-md-0",
                             ),
-                            dbc.Button(
-                                "Tract-level data (CSV)",
-                                id="btn-export-results-tract-csv",
-                                color="primary",
-                                size="sm",
+                            dbc.ButtonGroup(
+                                [
+                                    dbc.Button(
+                                        "Summary (CSV)",
+                                        id="btn-export-results-summary-csv",
+                                        color="primary",
+                                        size="sm",
+                                    ),
+                                    dbc.Button(
+                                        "Tracts (CSV)",
+                                        id="btn-export-results-tract-csv",
+                                        color="primary",
+                                        size="sm",
+                                    ),
+                                ],
+                                className="mt-1",
                             ),
-                        ]),
-                        dcc.Download(id="download-results-summary-csv"),
-                        dcc.Download(id="download-results-tract-csv"),
-                    ]),
-                ], className="mt-2 mb-4 shadow-sm border-0"),
+                            dcc.Download(id="download-results-summary-csv"),
+                            dcc.Download(id="download-results-tract-csv"),
+                        ],
+                    ),
+                ], className="mb-2 shadow-sm border-0"),
             ], md=12),
         ]),
-        
-    ], className="pt-1 pb-4")
+    ], className="pt-1 pb-2")
 
