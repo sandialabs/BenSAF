@@ -34,7 +34,7 @@ def run_mortality_pipeline(
         delta_concentration: Change in pollutant concentration per tract
         inputs: AnalysisInputs providing incidence and demographics; optional
             ``economic_core`` (from ``load_mortality_economic_tract_data``) with
-            ``per_capita_consumption`` and optional ``life_years_gained`` per tract.
+            ``per_capita_expenditure`` and optional ``life_years_gained`` per tract.
         mortality_function_params: Dict with mean_rr, lower_rr, upper_rr, unit_increase
 
     Returns:
@@ -87,8 +87,8 @@ def run_mortality_pipeline(
     default_life_years = 10.0
     per_capita_tract: Optional[pd.Series] = None
     life_years_tract: Optional[pd.Series] = None
-    if inputs.economic_core is not None and 'per_capita_consumption' in inputs.economic_core.columns:
-        per_capita_tract = inputs.economic_core['per_capita_consumption'].reindex(common_index)
+    if inputs.economic_core is not None and 'per_capita_expenditure' in inputs.economic_core.columns:
+        per_capita_tract = inputs.economic_core['per_capita_expenditure'].reindex(common_index)
         if 'life_years_gained' in inputs.economic_core.columns:
             life_years_tract = inputs.economic_core['life_years_gained'].reindex(common_index)
 
@@ -114,7 +114,7 @@ def run_mortality_pipeline(
         logger.debug("Computed mortality economic benefit")
     else:
         logger.debug(
-            "No tract-level per_capita_consumption on inputs; skipping mortality economic benefit"
+            "No tract-level per_capita_expenditure on inputs; skipping mortality economic benefit"
         )
 
     return impact, econ_benefit

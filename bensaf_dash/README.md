@@ -74,7 +74,7 @@ Upload your analysis data or load example data:
   - Required columns: `GEOID`, `mortality_rate`
 
 **Option B: Load Example Case Study**
-- Choose a case study in the dropdown, then **Load Selected Case Study** (inputs under `data/case-studies/`)
+- Choose a case study in the dropdown, then **Load Selected Case Study** (inputs under `data/case_studies/`)
 - Loads tract geometry, demographics, exposure, and mortality inputs for that study
 - Useful for testing and learning the workflow
 

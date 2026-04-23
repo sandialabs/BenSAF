@@ -12,32 +12,32 @@ from typing import Union, Tuple, Optional
 
 def calculate_mortality_economic_value(
     attributable_cases: Union[float, np.ndarray, pd.Series],
-    per_capita_consumption: Union[float, np.ndarray, pd.Series],
+    per_capita_expenditure: Union[float, np.ndarray, pd.Series],
     life_years_gained: Union[float, np.ndarray, pd.Series] = 10.0,
 ) -> Union[float, np.ndarray, pd.Series]:
     """
     Calculate economic value of mortality reduction.
 
-    Uses the expenditure function model: life value = per_capita_consumption x life_years_gained,
+    Uses the expenditure function model: life value = per_capita_expenditure x life_years_gained,
     then multiplies by attributable cases to get total economic value.
 
-    ``per_capita_consumption`` and ``life_years_gained`` may be scalars or tract-level Series
+    ``per_capita_expenditure`` and ``life_years_gained`` may be scalars or tract-level Series
     aligned with ``attributable_cases`` (same index when using Series).
     """
     if isinstance(attributable_cases, pd.Series):
         idx = attributable_cases.index
-        if isinstance(per_capita_consumption, pd.Series):
-            pc = per_capita_consumption.reindex(idx)
+        if isinstance(per_capita_expenditure, pd.Series):
+            pce = per_capita_expenditure.reindex(idx)
         else:
-            pc = per_capita_consumption
+            pce = per_capita_expenditure
         if isinstance(life_years_gained, pd.Series):
             ly = life_years_gained.reindex(idx)
         else:
             ly = life_years_gained
-        life_value = pc * ly
+        life_value = pce * ly
         return attributable_cases * life_value
 
-    life_value = np.asarray(per_capita_consumption, dtype=float) * np.asarray(
+    life_value = np.asarray(per_capita_expenditure, dtype=float) * np.asarray(
         life_years_gained, dtype=float
     )
     return np.asarray(attributable_cases, dtype=float) * life_value

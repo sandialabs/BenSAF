@@ -25,11 +25,6 @@ BenSAF Dash provides a web-based interface for conducting health impact assessme
    - Required columns: `GEOID` (must match tract geometries), `mortality_rate`
    - Represents baseline mortality rates per census tract
 
-5. **Preterm Birth Data** (Optional)
-   - Format: CSV
-   - Required columns: `GEOID`, `baseline_preterm_births`
-   - Enables preterm birth benefit calculations
-
 ### Key Assumptions
 
 - All datasets must share the same `GEOID` identifiers to enable spatial joins
@@ -47,7 +42,6 @@ BenSAF Dash provides a web-based interface for conducting health impact assessme
    - Load demographics data (population required)
    - Load baseline exposure data (via CSV upload or AERMOD extraction)
    - Load incidence/mortality data
-   - Load preterm birth data (optional)
 
 2. **Configuration**
    - Select mortality function(s) from available library
@@ -73,7 +67,6 @@ BenSAF Dash provides a web-based interface for conducting health impact assessme
 - **Demographics**: Population used for weighting health impacts and aggregating results
 - **Baseline Exposure**: Starting point for calculating exposure reductions under SAF scenarios
 - **Incidence Data**: Baseline rates used to calculate attributable cases from exposure changes
-- **Preterm Birth Data**: Baseline counts used to calculate preterm birth reductions
 
 ## Baseline Exposure: Two Paths
 
@@ -163,7 +156,6 @@ For each SAF blend scenario, the workflow produces:
 
 3. **Economic Benefits**
    - `mortality_value_mean`, `mortality_value_lower`, `mortality_value_upper`: Economic value of mortality reductions
-   - `preterm_birth_value_mean`, `preterm_birth_value_lower`, `preterm_birth_value_upper`: Economic value of preterm birth reductions (if applicable)
    - All values in configured currency units
 
 ### Aggregated Results
