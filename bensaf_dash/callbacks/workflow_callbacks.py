@@ -1010,7 +1010,6 @@ def register_callbacks(app):
             
             status = html.Div([
                 html.Span("✓ Analysis Complete! ", className="text-success fw-bold"),
-                html.Span(f"{len(scenarios)} scenarios analyzed. ", className="text-muted"),
                 html.A("View Results", href="#", className="text-primary", style={"textDecoration": "underline"})
             ])
             
@@ -1065,11 +1064,10 @@ def register_callbacks(app):
         global workflow_instance
         
         options = [
-            {'label': 'Attributable Cases Avoided', 'value': 'attributable_cases'},
-            {'label': 'Attributable Fraction', 'value': 'attributable_fraction'},
-            {'label': 'Relative Risk', 'value': 'relative_risk'},
+            {'label': 'Scenario Concentration', 'value': 'reduced_concentration'},
             {'label': 'Delta Concentration', 'value': 'delta_concentration'},
-            {'label': 'Reduced Concentration', 'value': 'reduced_concentration'},
+            {'label': 'Attributable Cases Avoided', 'value': 'attributable_cases'},
+        
         ]
         
         # Add economic benefit options if available
@@ -1271,29 +1269,32 @@ def register_callbacks(app):
         return fig
     
     @app.callback(
-        Output('results-table', 'children'),
-        Input('analysis-results', 'data')
+        Output("results-scenario-summary", "children"),
+        Input("analysis-results", "data"),
     )
-    def update_results_table(results):
+    def update_results_scenario_table(results):
         if not results:
-            return ""
-        
-        rows = []
+            return html.P(
+                "Run analysis from the sidebar to see scenario totals.",
+                className="text-muted small mb-0",
+            )
+
         has_econ = any(
             isinstance(r, dict) and r.get("mortality_economic_value") is not None
             for r in results.values()
         )
-        for scenario_key in sorted(results.keys(), key=lambda x: int(x)):
-            scenario_results = results[scenario_key]
+
+        ordered = sorted(results.items(), key=lambda kv: int(kv[0]))
+
+        rows = []
+        for scenario_key, scenario_results in ordered:
             sum_cases = float(scenario_results.get("total_cases", 0.0))
             sum_str = _format_results_map_sum(sum_cases, "attributable_cases")
             red_pct = float(scenario_results.get("pollutant_reduction", 0.0))
             cells = [
                 html.Td(f"{scenario_results['scenario']}%"),
-                html.Td(sum_str),
-                html.Td(f"{scenario_results['lower_cases']:.2f}"),
-                html.Td(f"{scenario_results['upper_cases']:.2f}"),
                 html.Td(f"{red_pct:.2f}"),
+                html.Td(sum_str),
             ]
             if has_econ:
                 ev = scenario_results.get("mortality_economic_value")
@@ -1302,22 +1303,25 @@ def register_callbacks(app):
                 else:
                     cells.append(html.Td("N/A"))
             rows.append(html.Tr(cells))
-        
+
         header_cells = [
-            html.Th("SAF blend"),
-            html.Th("Sum (cases, mean)"),
-            html.Th("Sum (lower 95%)"),
-            html.Th("Sum (upper 95%)"),
+            html.Th("SAF %"),
             html.Th("Pollutant reduction (%)"),
+            html.Th("Cases avoided"),
         ]
         if has_econ:
-            header_cells.append(html.Th("Sum (mortality $, mean)"))
-        
-        table = dbc.Table([
-            html.Thead(html.Tr(header_cells)),
-            html.Tbody(rows)
-        ], bordered=True, hover=True, responsive=True, striped=True, size='sm', className="mb-0")
-        
+            header_cells.append(html.Th("Mortality benefit ($)"))
+
+        table = dbc.Table(
+            [html.Thead(html.Tr(header_cells)), html.Tbody(rows)],
+            bordered=True,
+            hover=True,
+            responsive=True,
+            striped=True,
+            size="sm",
+            className="mb-0",
+        )
+
         return table
 
     @app.callback(
@@ -1561,7 +1565,8 @@ def register_callbacks(app):
             template='plotly_white',
             height=400,
             uirevision='constant',
-            margin=dict(l=58, r=20, t=55, b=88),
+            modebar=dict(orientation="v"),
+            margin=dict(l=58, r=48, t=55, b=88),
             legend=dict(
                 orientation="h",
                 x=0.5,
@@ -1902,6 +1907,7 @@ def register_callbacks(app):
             ])
         
         tracts_loaded = workflow_state.get('tracts_loaded', False)
+        demographics_loaded = workflow_state.get('demographics_loaded', False)
         exposure_loaded = workflow_state.get('exposure_loaded', False)
         mortality_loaded = workflow_state.get('mortality_loaded', False)
         config_set = (
@@ -1909,13 +1915,20 @@ def register_callbacks(app):
             and workflow_state.get('config_explicitly_set', False)
         )
         
-        all_ready = tracts_loaded and exposure_loaded and mortality_loaded and config_set
+        all_ready = (
+            tracts_loaded
+            and demographics_loaded
+            and exposure_loaded
+            and mortality_loaded
+            and config_set
+        )
         
         items = [
-            ("Census Tract Geometries", tracts_loaded),
-            ("Exposure Data", exposure_loaded),
-            ("Mortality Data", mortality_loaded),
-            ("Configuration Set", config_set),
+            ("Tracts", tracts_loaded),
+            ("Demographics", demographics_loaded),
+            ("Exposure", exposure_loaded),
+            ("Mortality", mortality_loaded),
+            ("Scenarios", config_set),
         ]
         
         def _row_item(item_name, item_status):
@@ -1924,7 +1937,10 @@ def register_callbacks(app):
                 if item_status
                 else html.I(className="bi bi-x-circle-fill text-danger me-2")
             )
-            return html.Div([icon, html.Span(item_name)], className="small py-1")
+            return html.Div(
+                [icon, html.Span(item_name, className="text-nowrap")],
+                className="small py-1",
+            )
 
         row_a = dbc.Row(
             [
@@ -1940,17 +1956,23 @@ def register_callbacks(app):
             ],
             className="g-1",
         )
+        row_c = dbc.Row(
+            [
+                dbc.Col(_row_item(items[4][0], items[4][1]), xs=12, sm=6),
+            ],
+            className="g-1",
+        )
 
         if all_ready:
             footer = html.Div(
-                html.Strong("All prerequisites met. You can run analysis.", className="text-success small"),
+                html.Strong("Ready to run.", className="text-success small"),
                 className="mt-2 pt-2 border-top",
             )
         else:
             footer = html.Div(
-                html.Strong("Complete all items above before running analysis.", className="text-warning small"),
+                html.Strong("Finish the checklist above.", className="text-warning small"),
                 className="mt-2 pt-2 border-top",
             )
 
-        return html.Div([row_a, row_b, footer])
+        return html.Div([row_a, row_b, row_c, footer])
     

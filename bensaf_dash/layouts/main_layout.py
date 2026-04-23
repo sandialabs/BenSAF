@@ -125,22 +125,22 @@ def create_overview_tab():
     """Landing tab: short stakeholder overview and how BenSAF relates to AERMOD, NAS/TRB, and BenMAP."""
     stages = [
         (
-            "Load and preview",
-            "Bring in your airport-area case study or use the example, then preview inputs on a map or table.",
+            "Load and Preview Case Study",
+            "Upload inputs or load the packaged example on the Data tab, then open Explore to preview merged data on a map or table.",
         ),
         (
-            "Set scenarios",
-            "Choose SAF blend levels to compare; the sidebar shows when everything is ready to run.",
+            "Configure SAF Scenarios",
+            "Add SAF blend percentages to compare on the Configuration tab; the sidebar checklist shows when you are ready to run.",
         ),
         (
-            "See results",
-            "Run the analysis, then review maps and exports for briefings or reports.",
+            "Run analysis and view results",
+            "Use Execute Analysis in the sidebar, then open Results for maps, the scenario summary table, and CSV exports.",
         ),
     ]
     items = [
         dbc.ListGroupItem(
             [
-                html.H5(title, className="mb-1 fs-6"),
+                html.H5(title, className="mb-1 fs-6 fw-bold text-body"),
                 html.P(text, className="mb-0 text-muted small"),
             ],
             className="py-2 px-3",
@@ -177,7 +177,7 @@ def create_overview_tab():
                         dbc.CardBody(
                             html.P(
                                 "Pollutant reduction from SAF blends follow Excel-based methods released by the "
-                                "National Academies and Transportation Research Board (NAS/TRB).",
+                                "National Academies of Science Transportation Research Board (NAS/TRB).",
                                 className="small text-muted mb-0",
                             ),
                             className="py-2",
@@ -213,16 +213,16 @@ def create_overview_tab():
 
     return html.Div(
         [
-            html.H3("Overview", className="mt-2 mb-2 fs-4"),
+            html.H3("Overview", className="mt-4 mb-3"),
             html.P(
                 "BenSAF is an analytical and visualization tool for estimating the health and economic benefits that "
                 "could result from the use of sustainable aviation fuel (SAF). Click the logo to return here; use the "
                 "sidebar for Data, Explore, Configuration, and Results.",
                 className="text-muted small mb-2",
             ),
-            html.H5("Using this dashboard", className="fs-6 mb-1 text-body"),
+            html.H5("Dashboard Workflow", className="fw-bold fs-5 mb-2 mt-3 text-body"),
             dbc.ListGroup(items, flush=True, className="border rounded shadow-sm mb-2"),
-            html.H5("Analytical backbone", className="fs-6 mb-1 text-body"),
+            html.H5("Methodology", className="fw-bold fs-5 mb-2 mt-3 text-body"),
             html.P(
                 "BenSAF follows an integrated multi-step procedure established in literature, which includes methods "
                 "from AERMOD, NAS/TRB, and BenMAP.",
@@ -644,13 +644,13 @@ def create_data_tab():
     ], className="pt-1 pb-4")
 
 def create_configuration_tab():
-    """SAF blend scenarios; mortality uses Bouma et al. by default."""
+    """SAF blend scenarios."""
     return html.Div([
         dbc.Row([
             dbc.Col([
                 html.H3("Configuration", className="mt-4 mb-3"),
                 html.P(
-                    "Define SAF blend scenarios to compare. Mortality impacts use the Bouma et al. model by default.",
+                    "Define SAF blend scenarios to compare.",
                     className="text-muted",
                 ),
             ])
@@ -689,20 +689,22 @@ def create_configuration_tab():
 
 
 def create_results_tab():
-    """Tract maps, table, and export."""
+    """Scenario summary table, tract map, and export."""
     return html.Div([
         dbc.Row([
             dbc.Col([
-                html.H3("Results", className="mt-2 mb-1 fs-4"),
+                html.H3("Results", className="mt-4 mb-3"),
                 html.P(
-                    "Map results by census tract and scenario, or export tables for briefings and reports.",
+                    "Scenario-level totals below; map shows tract-level detail. Export CSV for briefings.",
                     className="text-muted small mb-2",
                 ),
+                html.H5("Summary Table", className="mb-2"),
+                html.Div(id="results-scenario-summary"),
             ])
         ]),
         dbc.Row([
             dbc.Col([
-                html.H5("Maps by census tract", className="mt-2 mb-2"),
+                html.H5("Interactive Results", className="mt-3 mb-2"),
                 dbc.Row(
                     [
                         dbc.Col(
@@ -737,49 +739,16 @@ def create_results_tab():
                     ],
                     className="g-2 align-items-end",
                 ),
-                dbc.Tabs(
-                    [
-                        dbc.Tab(
-                            label="Map",
-                            tab_id="results-geo-map",
-                            children=[
-                                dcc.Loading(
-                                    id="loading-map",
-                                    type="circle",
-                                    children=[
-                                        dcc.Graph(
-                                            id="results-map",
-                                            config={"displayModeBar": True, "scrollZoom": True},
-                                            style={"height": "380px"},
-                                        )
-                                    ],
-                                ),
-                            ],
-                        ),
-                        dbc.Tab(
-                            label="Table",
-                            tab_id="results-geo-table",
-                            children=[
-                                dcc.Loading(
-                                    id="loading-results-table",
-                                    type="circle",
-                                    children=[
-                                        html.Div(
-                                            id="results-table",
-                                            style={
-                                                "height": "320px",
-                                                "overflowY": "auto",
-                                                "overflowX": "auto",
-                                            },
-                                        )
-                                    ],
-                                ),
-                            ],
-                        ),
+                dcc.Loading(
+                    id="loading-map",
+                    type="circle",
+                    children=[
+                        dcc.Graph(
+                            id="results-map",
+                            config={"displayModeBar": True, "scrollZoom": True},
+                            style={"height": "380px"},
+                        )
                     ],
-                    id="results-geo-tabs",
-                    active_tab="results-geo-map",
-                    className="mb-0",
                 ),
             ], md=12),
         ]),
@@ -794,7 +763,7 @@ def create_results_tab():
                         className="py-2",
                         children=[
                             html.P(
-                                "Summary CSV matches the scenario table; tract CSV adds geometry-linked columns.",
+                                "Summary CSV matches the scenario totals table; tract CSV adds geometry-linked columns.",
                                 className="small text-muted mb-2 mb-md-0",
                             ),
                             dbc.ButtonGroup(

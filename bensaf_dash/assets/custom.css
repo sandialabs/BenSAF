@@ -56,6 +56,33 @@ html {
     border-bottom: none;
     border-right: 1px solid var(--bs-border-color);
   }
+
+  /* Between default col-lg-3 (25%) and col-lg-4 (33%): extra room for prerequisites without shrinking main as much */
+  .bensaf-app-root .bensaf-sidebar.col-lg-3 {
+    flex: 0 0 auto;
+    width: 29%;
+    max-width: 29%;
+  }
+
+  .bensaf-app-root .bensaf-main-panels.col-lg-9 {
+    flex: 0 0 auto;
+    width: 71%;
+    max-width: 71%;
+  }
+}
+
+@media (min-width: 1200px) {
+  .bensaf-app-root .bensaf-sidebar.col-xl-3 {
+    flex: 0 0 auto;
+    width: 29%;
+    max-width: 29%;
+  }
+
+  .bensaf-app-root .bensaf-main-panels.col-xl-9 {
+    flex: 0 0 auto;
+    width: 71%;
+    max-width: 71%;
+  }
 }
 
 .bensaf-upload-zone {
