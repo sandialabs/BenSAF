@@ -922,15 +922,15 @@ class AermodParser:
         origin_x = section.get('origin_x', 0.0)
         origin_y = section.get('origin_y', 0.0)
         
-        for i in range(start, min(end, start + 1000, len(self.lines))):
+        for i in range(start, min(end, len(self.lines))):
             line = self.lines[i]
-            
+
             if 'DISTANCE (METERS)' in line:
                 next_idx = i + 1
                 if next_idx < len(self.lines):
                     next_line = self.lines[next_idx]
                     distances = re.findall(r'(\d+\.\d{2})', next_line)
-                    distances = [float(d) for d in distances if float(d) > 100]
+                    distances = [float(d) for d in distances]
             
             elif distances and re.match(r'^\s*\d+\.\d+\s+\|', line):
                 dir_match = re.match(r'^\s*(\d+\.\d+)\s+\|', line)
@@ -1011,15 +1011,15 @@ class AermodParser:
         results = []
         x_coords = None
         
-        for i in range(start, min(end, start + 1000, len(self.lines))):
+        for i in range(start, min(end, len(self.lines))):
             line = self.lines[i]
-            
+
             if 'X-COORD (METERS)' in line:
                 next_idx = i + 1
                 if next_idx < len(self.lines):
                     next_line = self.lines[next_idx]
                     x_coords = re.findall(r'(\d+\.\d{2})', next_line)
-                    x_coords = [float(x) for x in x_coords if float(x) > 1000]
+                    x_coords = [float(x) for x in x_coords]
             
             elif x_coords and re.match(r'^\s*\d+\.\d+\s+\|', line):
                 y_match = re.match(r'^\s*(\d+\.\d+)\s+\|', line)
