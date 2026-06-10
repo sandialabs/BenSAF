@@ -1,0 +1,147 @@
+---
+title: Walkthrough
+---
+
+This walkthrough covers a complete analysis using the bundled **ORD Synthetic** case study — 1,719 census tracts in the Chicago O'Hare metropolitan area with synthetic exposure and mortality data. All values are illustrative; do not use for actual policy decisions.
+
+By the end you will have run a multi-scenario SAF health impact analysis and exported the results.
+
+---
+
+## Step 1 — Launch the dashboard
+
+```bash
+python -m bensaf_dash.app
+```
+
+Open `http://localhost:8050`. You should see the BenSAF sidebar on the left and the **Data** page in the main panel.
+
+The sidebar **Prerequisites** checklist shows what is needed before the analysis can run. Everything starts unchecked.
+
+---
+
+## Step 2 — Load the example case study
+
+On the **Data** page, find the **Example Case Study** panel on the right side of the page.
+
+1. Open the dropdown and select **ORD Synthetic**.
+2. Click **Load Selected Case Study**.
+
+*[Screenshot: Data page after loading ORD Synthetic — success message, prerequisites checklist updating]*
+
+After loading, the sidebar checklist should show tracts, demographics, exposure, and mortality as satisfied. The case study loads:
+
+- **1,719 census tracts** covering Cook, DuPage, Will, Kane, and Lake counties
+- **Synthetic UFP exposure** with higher concentrations near O'Hare, decreasing with distance
+- **Baseline mortality rates** (0.5–1.2% annual) with realistic county-level variation
+- **Population** (~8.6 million total across the study area)
+
+---
+
+## Step 3 — Explore the loaded data
+
+Navigate to the **Explore** page.
+
+Use the variable dropdown to cycle through the loaded inputs:
+
+- **population** — tract-level population counts
+- **pollutant_concentration** — baseline UFP (pt/cm³); you should see higher values clustered around ORD
+- **mortality_rate** — baseline annual mortality rate per person
+
+*[Screenshot: Explore page — UFP concentration map with O'Hare gradient visible]*
+
+The table below the map shows the first 100 rows of the selected variable. Use this to confirm that GEOIDs look correct and that values are in a plausible range before proceeding.
+
+---
+
+## Step 4 — Configure the analysis
+
+Navigate to **Configuration**.
+
+### Health impact function
+
+The default selection is **Bouma et al. (2023)** — a large-population study linking ambient UFP to natural-cause mortality (HR = 1.012 per 2,723 pt/cm³). Leave this selected.
+
+The dose–response curve on the right shows how relative risk scales with UFP concentration under this function.
+
+*[Screenshot: Configuration page — health function panel with dose-response curve]*
+
+### SAF blend scenarios
+
+The default scenarios are already populated. For this walkthrough, use or add:
+
+- **10%** SAF blend
+- **25%** SAF blend
+- **50%** SAF blend
+
+Each blend maps to a pollutant reduction via a quadratic polynomial. The plot on the right shows the reduction curve with your scenarios marked.
+
+*[Screenshot: Configuration page — SAF blend scenario list and reduction curve with markers]*
+
+---
+
+## Step 5 — Execute the analysis
+
+In the sidebar, confirm all prerequisites are satisfied, then click **Execute Analysis**.
+
+The analysis runs in a few seconds. The status line will update to confirm completion (or display an error if something went wrong).
+
+*[Screenshot: Sidebar after successful run — all prerequisites green, status line showing completion]*
+
+---
+
+## Step 6 — Review the results
+
+Navigate to the **Results** page.
+
+### Summary cards
+
+At the top, one card per SAF scenario shows:
+
+- **Attributable mortality cases avoided** (mean, lower 95% CI, upper 95% CI)
+- **Monetized benefit** (if economic inputs were provided — not in this example)
+
+*[Screenshot: Results page — three summary cards for 10%, 25%, 50% scenarios]*
+
+For the ORD synthetic case study at 50% SAF blend you should expect on the order of tens to low hundreds of cases avoided across the ~8.6M population, depending on the exact synthetic exposure values.
+
+### Scenario comparison chart
+
+The bar chart below the cards compares cases avoided across all three scenarios side by side, with confidence interval bars.
+
+*[Screenshot: Results page — scenario comparison bar chart]*
+
+### Geographic visualization
+
+Select a scenario from the dropdown, then choose a result variable:
+
+- **attributable_cases_mean** — cases avoided per tract
+- **delta_concentration** — UFP reduction (pt/cm³) per tract
+- **attributable_fraction_mean** — fraction of baseline mortality attributable to UFP
+
+The map updates to show the spatial distribution. Tracts closest to O'Hare should show the largest absolute reductions.
+
+*[Screenshot: Results page — choropleth map showing attributable cases by tract]*
+
+### Detailed results table
+
+Below the map, a tract-level table shows all result columns for the selected scenario. Use this to inspect individual tracts or identify outliers.
+
+---
+
+## Step 7 — Export
+
+Scroll to the **Export** panel at the bottom of the Results page.
+
+- **Summary CSV** — one row per scenario, with total cases avoided and confidence intervals
+- **Tract-level CSV** — one row per census tract per scenario, suitable for GIS joins or custom reporting
+
+Download both and open the tract-level file to confirm the structure before using it downstream.
+
+---
+
+## What's next
+
+- **Bring your own data:** See [Input Requirements](05-inputs.qmd) for file formats and how to obtain each dataset.
+- **Understand each page in depth:** See [Page Reference](04-pages.qmd).
+- **Understand the methodology:** See [Methodology](06-methodology.qmd).

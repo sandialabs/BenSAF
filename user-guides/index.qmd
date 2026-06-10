@@ -1,0 +1,55 @@
+---
+title: BenSAF Dashboard
+---
+
+**BenSAF** (Benefits of Sustainable Aviation Fuels) estimates the health and economic benefits of SAF adoption for communities near airports. It translates SAF blend scenarios into tract-level reductions in ultrafine particle (UFP) exposure, then applies published concentration–response functions to quantify attributable mortality cases avoided and, optionally, their economic value.
+
+The **BenSAF Dashboard** is a web interface that runs the full analysis pipeline — data upload, scenario configuration, execution, and results — without requiring Python scripting.
+
+## Who it's for
+
+- **Researchers and analysts** building health impact assessments for airport communities
+- **Airport operators and airlines** communicating SAF sustainability benefits
+- **Federal and regulatory partners** (FAA, EPA) exploring SAF scenario tradeoffs
+- **Environmental justice practitioners** examining distributional health outcomes by census tract
+
+## Quick start
+
+**1. Install and launch**
+
+```bash
+pip install -e ".[dash]"
+python -m bensaf_dash.app
+```
+
+Open `http://localhost:8050` in your browser. See [Installation](02-installation.md) for full setup instructions.
+
+**2. Load the example case study**
+
+On the **Data** page, select *ORD Synthetic* from the example case study dropdown and click **Load Selected Case Study**. This loads 1,719 synthetic census tracts covering the Chicago O'Hare metro area — no file preparation needed.
+
+**3. Run the analysis**
+
+Navigate to **Configuration**, confirm the default health function (Bouma et al.) and SAF scenarios, then click **Execute Analysis** in the sidebar. Results appear on the **Results** page within a few seconds.
+
+For a full step-by-step walkthrough, see [Walkthrough](walkthrough.qmd).
+
+## How the analysis works
+
+BenSAF follows a four-step health impact assessment methodology:
+
+1. Define the study area and load population data (census tracts)
+2. Establish baseline UFP exposure and compute scenario reductions
+3. Apply a concentration–response function to estimate attributable mortality cases
+4. Optionally monetize the health benefits using the Value of Statistical Life framework
+
+See [Methodology](methodology.qmd) for the full scientific background.
+
+## Next steps
+
+| I want to… | Go to… |
+|---|---|
+| See the full workflow step by step | [Walkthrough](03-walkthrough.qmd) |
+| Understand each page in detail | [Page Reference](04-pages.qmd) |
+| Prepare my own input data | [Input Requirements](05-inputs.qmd) |
+| Understand the science behind the numbers | [Methodology](06-methodology.qmd) |

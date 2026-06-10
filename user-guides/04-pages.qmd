@@ -1,0 +1,140 @@
+---
+title: Page Reference
+---
+
+The dashboard uses a **sidebar + main panel** layout. The sidebar contains the workflow navigation, a prerequisites checklist, and the **Execute Analysis** button. The main panel shows the content for the currently active page.
+
+## Sidebar
+
+The sidebar is always visible. It contains:
+
+- **Workflow navigation** — buttons for Data, Explore, Configuration, and Results
+- **Prerequisites checklist** — shows which required inputs have been loaded and whether the analysis has been configured. The checklist updates live as you work through the workflow.
+- **Execute Analysis** — runs the full analysis against all configured SAF scenarios. Becomes active once all required prerequisites are satisfied.
+
+---
+
+## Data
+
+The Data page is where all inputs enter the analysis. There are two paths.
+
+### Path A — Upload your own data
+
+The **File Upload** accordion on the left has sections for each required input. Expand each section to upload the corresponding file:
+
+1. **Case study boundary** — GeoJSON, Shapefile, or GeoPackage with census tract geometries
+2. **Demographics** — CSV with `GEOID` and `population` columns
+3. **Baseline exposure** — either a tract-level CSV *or* AERMOD `.ADO` files (see below)
+4. **Mortality rate** — CSV with `GEOID` and `mortality_rate` columns
+5. **Per-capita expenditure** *(optional)* — CSV enabling monetized benefit estimates
+
+**AERMOD exposure path:** If you choose to upload `.ADO` files instead of a pre-processed CSV, expand the AERMOD sub-section. Upload one or more landing-phase files and/or takeoff-phase files. Assign a numeric weight to each file (defaults to equal weight within each phase). Provide the CRS string for the receptor grid (e.g., `EPSG:32610`). The dashboard will derive tract-level UFP concentrations automatically.
+
+See [Input Requirements](05-inputs.qmd) for detailed format specifications and guidance on obtaining each dataset.
+
+### Path B — Load an example case study
+
+The **Example Case Study** panel on the right lets you load a complete bundled dataset with one click. Select a case study from the dropdown and click **Load Selected Case Study**. Available case studies:
+
+| Case study | Description |
+|---|---|
+| ORD Synthetic | 1,719 synthetic tracts, Chicago O'Hare metro area |
+
+*[Screenshot: Data page — upload accordion on the left, example loader on the right]*
+
+---
+
+## Explore
+
+The Explore page provides a spatial and tabular preview of the loaded datasets before running the analysis.
+
+Use the **variable dropdown** to select which input to display:
+
+- `population` — total population per tract
+- `pollutant_concentration` — baseline UFP (pt/cm³)
+- `mortality_rate` — baseline annual mortality rate (deaths per person per year)
+- Additional demographic covariates if present in your tract file
+
+The **map** renders the selected variable as a choropleth across all loaded tracts. The **data table** below shows the first 100 rows.
+
+Use this page to verify that:
+
+- All tracts loaded correctly and cover the expected geography
+- UFP exposure shows a plausible spatial gradient relative to the airport
+- GEOIDs are consistent across datasets (mismatches appear as missing values)
+
+*[Screenshot: Explore page — choropleth map with variable dropdown, data table below]*
+
+---
+
+## Configuration
+
+The Configuration page has two panels.
+
+### Health impact function
+
+Select one or more concentration–response functions from the library dropdown. The currently selected function's parameters and a dose–response curve are shown to the right.
+
+The default function is **Bouma et al. (2023)**, which specifies a hazard ratio of HR = 1.012 (95% CI: 1.010–1.015) per 2,723 pt/cm³ increase in UFP for natural-cause mortality in adults. See [Methodology](06-methodology.qmd) for background on this function.
+
+Use the checkboxes to select which functions to include in the analysis run. All selected functions are evaluated for every SAF scenario.
+
+*[Screenshot: Configuration page — function selector with dose-response curve]*
+
+### SAF blend scenarios
+
+Enter one or more SAF blend percentages (0–50%) in the scenario list and click **Add Scenario**. Each blend percentage maps to a UFP reduction percentage via a built-in quadratic polynomial:
+
+```
+Reduction (%) = −0.0152 × SAF% + 0.00009 × SAF%²
+```
+
+The plot shows this reduction curve with your configured scenarios marked. All scenarios are evaluated in a single analysis run, so results remain directly comparable.
+
+*[Screenshot: Configuration page — scenario list and polynomial reduction curve with markers]*
+
+---
+
+## Results
+
+The Results page appears after a successful analysis run. It presents outputs at three levels.
+
+### Summary cards
+
+One card per SAF scenario, showing:
+
+- **Attributable mortality cases avoided** — mean estimate with lower and upper 95% confidence intervals
+- **Monetized benefit** — shown if per-capita expenditure data were provided
+
+*[Screenshot: Results — summary cards row]*
+
+### Scenario comparison
+
+A bar chart comparing cases avoided (and economic benefits, if available) across all scenarios. Confidence interval bars are displayed.
+
+Select a specific scenario from the dropdown above the geographic section to drill into tract-level detail for that scenario.
+
+*[Screenshot: Results — scenario comparison bar chart]*
+
+### Geographic visualization
+
+A tract-level choropleth map for the selected scenario. Use the **result variable** dropdown to switch between:
+
+| Variable | Description |
+|---|---|
+| `attributable_cases_mean` | Cases avoided per tract (mean) |
+| `attributable_cases_lower/upper` | 95% confidence bounds |
+| `attributable_fraction_mean` | Fraction of baseline mortality attributable to UFP |
+| `delta_concentration` | UFP reduction (pt/cm³) under this scenario |
+| `mortality_value_mean` | Economic value of mortality reduction (if economic data loaded) |
+
+The **detailed results table** below the map shows all result columns for each tract in the selected scenario.
+
+*[Screenshot: Results — map and detailed table]*
+
+### Export
+
+Two download options at the bottom of the page:
+
+- **Summary CSV** — one row per scenario with population-level totals and confidence intervals
+- **Tract-level CSV** — wide format, one row per tract per scenario, suitable for GIS joins and custom reporting
