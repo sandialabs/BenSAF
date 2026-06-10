@@ -1,0 +1,148 @@
+---
+title: Input Requirements
+---
+
+All datasets are linked by a shared `GEOID` census tract identifier. Every file you upload must use the same GEOID format — mismatched identifiers across files will produce missing values or errors in the analysis.
+
+---
+
+## 1. Case Study Boundary
+
+**Format:** GeoJSON, Shapefile, or GeoPackage
+
+| Field | Type | Description |
+|---|---|---|
+| `GEOID` | string | Census tract identifier (e.g., `17031010100`) |
+| `geometry` | polygon | Tract boundary |
+
+Defines the spatial frame for all joins, maps, and aggregations. Keep attribute columns minimal — extra columns are ignored but increase file size.
+
+### Where to get it
+
+Download Census TIGER/Line shapefiles from the [Census Bureau](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html). Select the relevant state(s) and year, download the census tract shapefile, and clip to your study area (typically the set of tracts within a defined radius of the airport).
+
+---
+
+## 2. Demographics
+
+**Format:** CSV, one row per census tract
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `GEOID` | string | yes | Census tract identifier |
+| `population` | integer | yes | Total tract population |
+| additional covariates | numeric | no | Age strata, income, race/ethnicity, SVI, etc. |
+
+Optional demographic columns are passed through to results and can be used for environmental justice analysis outside the dashboard.
+
+### Where to get it
+
+Use the [Census Bureau Data Explorer](https://data.census.gov/) or the Census API. The American Community Survey (ACS) 5-Year Estimates are the standard source for tract-level population and demographic variables:
+
+- **Total population:** Table `B01003`
+- **Race/ethnicity:** Table `B03002`
+- **Income/poverty:** Table `C17002`
+- **Social Vulnerability Index (SVI):** [CDC ATSDR](https://www.atsdr.cdc.gov/placeandhealth/svi/index.html)
+
+Export as CSV and ensure the `GEOID` column is present and formatted consistently with your boundary file (11-digit string, e.g., `17031010100`).
+
+---
+
+## 3. Baseline Pollutant Exposure
+
+There are two ways to provide exposure data.
+
+### Option A — CSV upload
+
+**Format:** CSV, one row per census tract
+
+| Field | Type | Description |
+|---|---|---|
+| `GEOID` | string | Census tract identifier |
+| `ufp` / `pollutant_concentration` / `baseline_pollutant_concentration` | numeric | Baseline UFP concentration (pt/cm³) |
+
+All three column name variants are accepted and normalized internally.
+
+### Option B — AERMOD `.ADO` files
+
+Upload one or more `.ADO` output files from an AERMOD dispersion model run. The dashboard processes these into tract-level UFP estimates automatically.
+
+**What to provide:**
+
+- One or more **landing-phase** `.ADO` files and/or one or more **takeoff-phase** `.ADO` files
+- A **numeric weight** for each file (defaults to equal weight within each phase)
+- The **CRS** of the AERMOD receptor grid (e.g., `EPSG:32610` for UTM Zone 10N)
+
+**What the dashboard does:**
+
+1. Parses annual-average CO concentrations from each file
+2. Combines multiple files within each phase using the supplied weights
+3. Converts CO concentrations to percentile ranks, then applies a log-linear calibration model to estimate UFP (pt/cm³)
+4. Spatially joins receptor points to census tracts and averages within each tract
+5. Sums landing and takeoff UFP where both phases are present
+
+Calibration coefficients are loaded from `data/aermod_calibration_coefficients.json`. These were derived from a SEA-TAC monitoring study — users applying the tool to other airports should review and update these coefficients as appropriate.
+
+> **Only the phases you upload are included.** Landing-only or takeoff-only submissions are valid.
+
+---
+
+## 4. Baseline Mortality Rate
+
+**Format:** CSV, one row per census tract
+
+| Field | Type | Description |
+|---|---|---|
+| `GEOID` | string | Census tract identifier |
+| `mortality_rate` | numeric | Baseline all-cause mortality rate (deaths per person per year) |
+
+Note the units: this is a **rate per person per year** (typically 0.005–0.015), not per 100,000. Divide CDC WONDER figures accordingly.
+
+### Where to get it
+
+[CDC WONDER](https://wonder.cdc.gov/) provides county-level mortality data. Select *Underlying Cause of Death*, filter to natural causes (ICD-10 A00–R99) for adults 30+, and download for the counties in your study area. Assign county rates to the census tracts within each county, or use a tract-level source if available.
+
+---
+
+## 5. Per-Capita Expenditure *(optional)*
+
+**Format:** CSV, one row per census tract
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `GEOID` | string | yes | Census tract identifier |
+| `per_capita_expenditure` | numeric | yes | Also accepted as `per_capita_consumption` or `income` (legacy column names) |
+| `life_years_gained` | numeric | no | Supplemental economic valuation input |
+
+Providing this file enables monetized mortality benefit estimates (Value of Statistical Life framework). If omitted, the Results page shows case counts only.
+
+### Where to get it
+
+Per-capita income or consumption data at the tract level is available from the ACS (Table `B19301`) or the Bureau of Economic Analysis.
+
+---
+
+## Bundled reference files
+
+These files ship with the repository and are not uploaded by the user. They contain the scientific parameters that govern the analysis.
+
+| File | Description |
+|---|---|
+| `data/aermod_calibration_coefficients.json` | Log-linear model (intercept + landing/takeoff coefficients) converting AERMOD CO percentiles to UFP (pt/cm³). Derived from a SEA-TAC calibration study. |
+| `data/saf_blend_parameters.json` | Quadratic polynomial mapping SAF blend % to UFP reduction %. Default: Reduction = −0.0152·SAF + 0.00009·SAF². |
+| `data/mortality_functions.json` | Concentration–response parameters (Bouma et al. and others) available in the Configuration page. |
+
+To apply BenSAF to a new airport with different calibration data or SAF reduction assumptions, update these JSON files before running the analysis.
+
+---
+
+## Common issues
+
+**GEOIDs don't match across files**
+Census TIGER shapefiles use 11-digit GEOIDs (`17031010100`). ACS CSV downloads sometimes include a `1400000US` prefix — strip this before uploading.
+
+**Mortality rate is too high**
+CDC WONDER reports rates per 100,000. Divide by 100,000 before uploading.
+
+**AERMOD CRS mismatch**
+If receptor points don't align with tract boundaries, double-check the CRS string. AERMOD outputs are often in a UTM zone — confirm which zone covers your airport.

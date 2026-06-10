@@ -1,0 +1,139 @@
+---
+title: Methodology
+---
+
+BenSAF implements a four-step health impact assessment methodology based on:
+
+> Blanco, M.N. et al. "Quantifying health benefits of sustainable aviation fuels: Modeling decreased ultrafine particle emissions and associated impacts on communities near the Seattle-Tacoma International Airport." *Environmental Research*, 2024.
+
+---
+
+## Overview
+
+The core question is: *if a given percentage of jet fuel is replaced with SAF, how many premature deaths are avoided in the surrounding community?*
+
+The answer flows through four steps:
+
+1. Define the study area and collect population/mortality data
+2. Establish baseline UFP exposure and compute scenario reductions
+3. Apply a concentration–response function to estimate attributable mortality cases
+4. Optionally monetize the health benefits
+
+---
+
+## Step 1 — Study area and population data
+
+The study area is a set of census tracts — typically all tracts where AERMOD estimates non-zero ground-level concentrations from aircraft operations. Each tract carries:
+
+- Total population (and optional demographic subgroups)
+- Baseline mortality rate (deaths per person per year for natural causes, adults 30+)
+
+Census tracts are the unit of analysis throughout. All exposure estimates, health calculations, and results are produced at the tract level and then aggregated to population-weighted totals.
+
+---
+
+## Step 2 — Exposure surfaces
+
+### Baseline exposure
+
+Baseline UFP exposure is expressed as an annual average concentration at the census tract level (pt/cm³). It can come from:
+
+- **A pre-processed CSV** — tract-level concentrations derived externally
+- **AERMOD dispersion modeling** — the dashboard processes `.ADO` output files into tract-level UFP using a calibration pipeline (see [Input Requirements — AERMOD path](05-inputs.qmd#option-b-aermod-ado-files))
+
+The AERMOD calibration uses CO as a proxy for UFP dispersion (modeled at 1 g/s), then applies a log-linear model to convert CO percentile ranks to absolute UFP concentrations:
+
+```
+log(UFP) = intercept + coef_landing × landing_percentile
+log(UFP) = intercept + coef_takeoff × takeoff_percentile
+```
+
+Calibration coefficients are derived from real-world UFP measurements at SEA-TAC using Positive Matrix Factorization (PMF).
+
+### Scenario reductions
+
+For each SAF blend scenario, a pollutant reduction is calculated using a quadratic polynomial fit to National Academies/TRB non-volatile particulate matter (nvPM) reduction estimates:
+
+```
+Reduction (%) = −0.0152 × SAF% + 0.00009 × SAF%²
+```
+
+This reduction is applied multiplicatively to the baseline exposure to produce a scenario-specific concentration surface:
+
+```
+Reduced concentration = Baseline × (1 − Reduction / 100)
+```
+
+The delta (baseline minus reduced) is what enters the health calculation.
+
+---
+
+## Step 3 — Health risk estimation
+
+### Concentration–response function
+
+BenSAF uses a log-linear concentration–response model. The default function is from Bouma et al. (2023), a large population study of ambient UFP and natural-cause mortality in the Netherlands:
+
+| Parameter | Value |
+|---|---|
+| Hazard Ratio (mean) | 1.012 |
+| HR lower 95% CI | 1.010 |
+| HR upper 95% CI | 1.015 |
+| Unit increase | 2,723 pt/cm³ |
+
+The hazard ratio is per 2,723 pt/cm³ increase in annual average UFP.
+
+### Attributable fraction
+
+The attributable fraction (AF) is the fraction of baseline mortality that would be avoided if exposure were reduced by Δc:
+
+```
+Relative Risk (RR) = HR ^ (Δc / unit_increase)
+Attributable Fraction (AF) = (RR − 1) / RR
+```
+
+### Attributable cases
+
+Attributable cases avoided per tract:
+
+```
+AC = AF × mortality_rate × population
+```
+
+Summed across all tracts, with confidence intervals propagated from the HR lower/upper bounds:
+
+```
+Total cases avoided = Σ(AF_mean × mortality_rate × population)
+```
+
+Upper and lower bounds use the HR upper and lower confidence limits respectively.
+
+---
+
+## Step 4 — Economic valuation (optional)
+
+If per-capita expenditure data are supplied, BenSAF monetizes mortality reductions using the **Value of Statistical Life (VSL)** framework. Economic parameters are loaded from `data/economic_parameters.json`.
+
+The economic output represents the aggregate willingness-to-pay for the mortality risk reduction across the study population — not a per-individual payment. It is expressed in the same currency units as the input expenditure data.
+
+---
+
+## Limitations
+
+| Limitation | Detail |
+|---|---|
+| Spatial resolution | Census tract level only; sub-tract gradients are not captured |
+| Single pollutant | UFP only; co-pollutants (PM₂.₅, NO₂, etc.) are not modeled |
+| Calibration transferability | AERMOD calibration coefficients derived at SEA-TAC; may not hold at other airports without re-calibration |
+| Static demographics | Population and demographics are fixed at the input year; future projections not modeled |
+| Scenario independence | Scenarios are evaluated independently; synergistic or cumulative effects not modeled |
+| Log-linear assumption | The concentration–response function is assumed log-linear with no threshold; non-linearities are not captured |
+| Single-user interface | One concurrent user per dashboard instance |
+
+---
+
+## Key references
+
+- Blanco, M.N. et al. (2024). Quantifying health benefits of sustainable aviation fuels. *Environmental Research.*
+- Bouma, M.J. et al. (2023). Long-term exposure to ambient ultrafine particles and natural-cause mortality. *Epidemiology.*
+- National Academies of Sciences, Engineering, and Medicine (2022). *Role of Non-Volatile Particulate Matter Emissions from Aircraft in Airport-Attributable Health Effects.* TRB Special Report.
