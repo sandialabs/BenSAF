@@ -15,6 +15,8 @@ BenSAF provides a generalized framework for:
 
 ## Installation
 
+BenSAF requires **Python 3.11 or higher**.
+
 1. Clone the repository:
 ```bash
 git clone <repository-url>
@@ -25,13 +27,13 @@ cd BenSAF
 
    **Using miniconda:**
 ```bash
-conda create -n bensaf python
+conda create -n bensaf python=3.11
 conda activate bensaf
 ```
 
    **Using uv:**
 ```bash
-uv venv
+uv venv --python 3.11
 source .venv/bin/activate  # On Unix/macOS
 # or
 .venv\Scripts\activate  # On Windows
@@ -41,23 +43,6 @@ source .venv/bin/activate  # On Unix/macOS
 ```bash
 pip install -e .
 ```
-
-## Documentation
-
-The documentation is built using Sphinx. To build the documentation:
-
-1. Make sure you have installed the development dependencies:
-```bash
-uv pip install -e ".[dev]"
-```
-
-2. Build the documentation:
-```bash
-cd docs
-make html
-```
-
-The built documentation will be available in `docs/build/html/`.
 
 ## Project Structure
 
@@ -101,12 +86,7 @@ Features:
 - Real-time visualization
 - No installation required for end users (when deployed)
 
-Install Dash dependencies:
-```bash
-uv pip install -e ".[dash]"
-```
-
-See `bensaf_dash/README.md` for detailed documentation.
+Included in the base install (`pip install -e .`). See `bensaf_dash/README.md` for detailed documentation.
 
 ### 2. Desktop GUI (PyQt/PySide6)
 
@@ -124,7 +104,7 @@ Features:
 
 Install GUI dependencies:
 ```bash
-uv pip install -e ".[gui]"
+pip install -e ".[gui]"
 ```
 
 See `bensaf_gui/README.md` for detailed documentation.
@@ -141,88 +121,6 @@ workflow = Workflow()
 ```
 
 All interfaces use the same core `bensaf` package, ensuring consistent results.
-
-## Usage
-
-### Basic Usage (Python API)
-
-```python
-from bensaf.workflow import Workflow
-import geopandas as gpd
-import pandas as pd
-
-# Load your data
-tracts_gdf = gpd.read_file("census_tracts.gpkg")
-exposure_df = pd.read_csv("exposure_data.csv")
-mortality_df = pd.read_csv("mortality_data.csv")
-
-# Initialize workflow
-config = {
-    'control_scenarios': [5, 25, 50],  # Emission reduction percentages
-    'demographic_columns': ['race', 'income_level']
-}
-workflow = Workflow(config)
-
-# Load data
-workflow.load_tract_data(tracts_gdf)
-workflow.load_exposure_data(exposure_df)
-workflow.load_mortality_data(mortality_df)
-
-# Load health impact function (Bouma et al.)
-workflow.load_health_impact_function(
-    mean_rr=1.012,
-    lower_rr=1.010,
-    upper_rr=1.015,
-    unit_increase=2723  # pt/cm3
-)
-
-# Run analysis
-results = workflow.run_complete_analysis("results")
-```
-
-### Using Configuration Files
-
-You can also use YAML configuration files:
-
-```python
-import yaml
-from pathlib import Path
-from bensaf.workflow import Workflow
-
-# Load configuration
-with open("bensaf_workflow_config.yaml", "r") as f:
-    config = yaml.safe_load(f)
-
-# Initialize workflow with config
-workflow = Workflow(config)
-
-# Continue with data loading and analysis...
-```
-
-### Example Scripts
-
-The `examples/` directory contains example scripts demonstrating the workflow:
-
-- `workflow_example.py`: Complete workflow with synthetic data
-
-
-## Data Requirements
-
-The workflow requires the following data:
-
-1. **Census Tract Data** (GeoDataFrame):
-   - GEOID: Census tract identifier
-   - geometry: Tract geometry
-   - population: Total population
-   - Optional demographic columns
-
-2. **Exposure Data** (DataFrame or GeoDataFrame):
-   - GEOID: Census tract identifier
-   - pollutant_concentration: Baseline pollutant concentration
-
-3. **Mortality Data** (DataFrame):
-   - GEOID: Census tract identifier
-   - mortality_rate: Baseline mortality rate (deaths per person per year)
 
 ## License
 

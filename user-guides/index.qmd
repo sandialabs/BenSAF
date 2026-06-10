@@ -18,7 +18,7 @@ The **BenSAF Dashboard** is a web interface that runs the full analysis pipeline
 **1. Install and launch**
 
 ```bash
-pip install -e ".[dash]"
+pip install -e .
 python -m bensaf_dash.app
 ```
 
@@ -32,7 +32,7 @@ On the **Data** page, select *ORD Synthetic* from the example case study dropdow
 
 Navigate to **Configuration**, confirm the default health function (Bouma et al.) and SAF scenarios, then click **Execute Analysis** in the sidebar. Results appear on the **Results** page within a few seconds.
 
-For a full step-by-step walkthrough, see [Walkthrough](walkthrough.qmd).
+For a full step-by-step walkthrough, see [Walkthrough](03-walkthrough.qmd).
 
 ## How the analysis works
 
@@ -43,7 +43,7 @@ BenSAF follows a four-step health impact assessment methodology:
 3. Apply a concentration–response function to estimate attributable mortality cases
 4. Optionally monetize the health benefits using the Value of Statistical Life framework
 
-See [Methodology](methodology.qmd) for the full scientific background.
+See [Methodology](06-methodology.qmd) for the full scientific background.
 
 ## Next steps
 

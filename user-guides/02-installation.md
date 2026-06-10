@@ -26,18 +26,34 @@ Optional dependencies:
 
 ### From Source
 
+**1. Clone the repository:**
+
 ```bash
 git clone <repository-url>
 cd BenSAF
-pip install -e .
 ```
 
-### Development Installation
+**2. Create and activate a virtual environment.**
 
-For development, install with optional dependencies:
+Using conda (miniconda):
 
 ```bash
-pip install -e ".[gui,dash]"
+conda create -n bensaf python=3.11
+conda activate bensaf
+```
+
+Using uv:
+
+```bash
+uv venv --python 3.11
+source .venv/bin/activate  # Unix/macOS
+.venv\Scripts\activate     # Windows
+```
+
+**3. Install the package:**
+
+```bash
+pip install -e .
 ```
 
 ## Verification
