@@ -199,8 +199,42 @@ def _prompt_parse_export_config() -> dict:
     return {"section_types": section_types, "format": fmt, "output_dir": Path(out_dir)}
 
 
+def _metadata_section_df(metadata, section_type: str) -> pd.DataFrame:
+    """Build a DataFrame for non-result (pathway/summary) section types from FileMetadata.
+
+    The new aermod_parser package doesn't preserve these as raw text sections the way
+    the old AermodParser did; this reconstructs an equivalent table from the structured
+    metadata it does extract.
+    """
+    if section_type == "SOURCE_PATHWAY":
+        return metadata.sources
+    if section_type in ("CONTROL_PATHWAY", "MODEL_SETUP_SUMMARY"):
+        return pd.DataFrame([{
+            "pollutant": metadata.pollutant,
+            "averaging_periods": ", ".join(metadata.averaging_periods),
+            "model_options": metadata.model_options,
+        }])
+    if section_type in ("RECEPTOR_PATHWAY", "RECEPTOR_NETWORK_SUMMARY"):
+        rows = [
+            {"network_id": nid, "network_type": n.network_type, "origin_x": n.origin_x, "origin_y": n.origin_y}
+            for nid, n in metadata.networks.items()
+        ]
+        rows += [{"included_receptor_file": f} for f in metadata.included_receptor_files]
+        return pd.DataFrame(rows)
+    if section_type == "METEOROLOGY_PATHWAY":
+        return pd.DataFrame([{
+            "surface_met_file": metadata.surface_met_file,
+            "profile_met_file": metadata.profile_met_file,
+        }])
+    if section_type == "SOURCE_GROUPS_SUMMARY":
+        if metadata.sources.empty or "source_group" not in metadata.sources.columns:
+            return pd.DataFrame()
+        return pd.DataFrame({"source_group": metadata.sources["source_group"].unique()})
+    return pd.DataFrame()
+
+
 def run_parse_export(files: list[Path], config: dict) -> None:
-    from bensaf.aermod_parser import AermodParser
+    from aermod_parser import AermodFile
 
     out_dir: Path = config["output_dir"]
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -211,26 +245,28 @@ def run_parse_export(files: list[Path], config: dict) -> None:
     section_frames: dict[str, list[pd.DataFrame]] = {st: [] for st in section_types}
     summary_rows = []
 
+    result_types = {"ANNUAL_AVERAGE", "1ST_HIGHEST", "2ND_HIGHEST", "3RD_HIGHEST", "CONCURRENT_AVERAGE"}
+
     for path in files:
         print(f"\n  Parsing {path.name} ...")
-        parser = AermodParser(str(path))
-        results = parser.parse(section_types=section_types)
+        f = AermodFile.from_path(path)
 
         for st in section_types:
-            data = results.get(st)
-            if data is None:
-                continue
-            if isinstance(data, pd.DataFrame) and len(data) > 0:
+            if st in result_types:
+                if st == "ANNUAL_AVERAGE":
+                    data = f.annual_average
+                elif st == "CONCURRENT_AVERAGE":
+                    data = f.concurrent
+                else:
+                    data = f.n_highest(rank=int(st[0]))
+            else:
+                data = _metadata_section_df(f.metadata, st)
+
+            if data is not None and len(data) > 0:
                 data = data.copy()
                 data["source_file"] = path.name
                 section_frames[st].append(data)
                 summary_rows.append({"file": path.name, "section": st, "rows": len(data)})
-            elif isinstance(data, list) and data:
-                # Non-tabular sections (pathway summaries etc.) stored as list of dicts
-                flat = pd.json_normalize(data)
-                flat["source_file"] = path.name
-                section_frames[st].append(flat)
-                summary_rows.append({"file": path.name, "section": st, "rows": len(flat)})
 
     # Write outputs
     wrote_any = False
@@ -415,7 +451,7 @@ def run_generate_surface(config: dict) -> None:
 # ---------------------------------------------------------------------------
 
 def run_diagnose(files: list[Path], crs: str) -> None:
-    from bensaf.aermod_parser import AermodParser
+    from aermod_parser import AermodFile
     from bensaf.core.exposure_generation import extract_annual_average
 
     print(f"\n  Running diagnostic on {len(files)} file(s) with CRS {crs}.\n")
@@ -427,20 +463,24 @@ def run_diagnose(files: list[Path], crs: str) -> None:
         print(f"  {path.name}  ({path.stat().st_size / 1024:.0f} KB)")
 
         # Section inventory
-        parser = AermodParser(str(path))
         try:
-            sections_df = parser.get_sections_info()
+            f = AermodFile.from_path(path)
         except Exception as e:
             print(f"    Could not read file: {e}")
             all_clear = False
             continue
 
-        if sections_df.empty:
+        counts: dict[str, int] = {st: len([s for s in f.sections if s.section_type == st]) for st in f.section_types}
+        if not f.metadata.sources.empty:
+            counts["SOURCE_PATHWAY"] = 1
+        if f.metadata.networks:
+            counts["RECEPTOR_NETWORK_SUMMARY"] = len(f.metadata.networks)
+
+        if not counts:
             print("    No sections detected.")
             all_clear = False
             continue
 
-        counts = sections_df["type"].value_counts()
         print("    Sections found:")
         for stype, count in counts.items():
             label = SECTION_LABELS.get(stype, stype)
