@@ -402,7 +402,7 @@ def create_data_tab():
                     
                     dbc.AccordionItem([
                         html.P([html.Strong("Data type: "), "Tabular (CSV), one row per census tract."], className="mb-1 small"),
-                        html.P([html.Strong("Required fields: "), "GEOID; include population and other covariates used by the health pipelines."], className="mb-1 small"),
+                        html.P([html.Strong("Required fields: "), "Two columns — col 1 is the GEOID index, col 2 is the population value (column name does not matter)."], className="mb-1 small"),
                         html.P(
                             [html.Strong("Role in analysis: "), "Population weighting and demographic context for incidence and impact calculations."],
                             className="mb-3 small text-muted",
@@ -422,7 +422,7 @@ def create_data_tab():
                     dbc.AccordionItem([
                         html.P([html.Strong("Data type: "), "Gridded or tabular baseline pollutant concentrations per tract; upload CSV or build from AERMOD .ADO outputs."], className="mb-1 small"),
                         html.P(
-                            [html.Strong("Required fields: "), "CSV: GEOID and a concentration column (e.g. ufp / baseline_pollutant_concentration). AERMOD: weighted .ADO files and CRS as described below."],
+                            [html.Strong("Required fields: "), "CSV: two columns — col 1 is the GEOID index, col 2 is the concentration value (column name does not matter). AERMOD: weighted .ADO files and CRS as described below."],
                             className="mb-1 small",
                         ),
                         html.P(
@@ -530,7 +530,7 @@ def create_data_tab():
                     dbc.AccordionItem([
                         html.P([html.Strong("Data type: "), "Tabular (CSV), one row per census tract."], className="mb-1 small"),
                         html.P(
-                            [html.Strong("Required fields: "), "GEOID and mortality_rate."],
+                            [html.Strong("Required fields: "), "Two columns — col 1 is the GEOID index, col 2 is the mortality rate (column name does not matter)."],
                             className="mb-1 small",
                         ),
                         html.P(
@@ -568,7 +568,7 @@ def create_data_tab():
                     dbc.AccordionItem([
                         html.P([html.Strong("Data type: "), "Tabular (CSV), one row per census tract."], className="mb-1 small"),
                         html.P(
-                            [html.Strong("Required fields: "), "GEOID and per_capita_expenditure. Optional: life_years_gained."],
+                            [html.Strong("Required fields: "), "Two columns — col 1 is the GEOID index, col 2 is the per-capita expenditure value (column name does not matter)."],
                             className="mb-1 small",
                         ),
                         html.P(

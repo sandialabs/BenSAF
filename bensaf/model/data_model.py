@@ -18,6 +18,31 @@ from bensaf.model.domain import ScenarioResult
 logger = logging.getLogger(__name__)
 
 
+def _normalize_to_single_col(df: pd.DataFrame, canonical_name: str) -> pd.DataFrame:
+    """
+    Normalize a user-supplied DataFrame to two-column (GEOID, canonical_name) form.
+
+    Expected format: first column is the GEOID index, second column is the value.
+    Column names are ignored — only position matters.  Extra columns beyond the
+    first two are silently dropped.  If the DataFrame has only one column, the
+    index is treated as the GEOID.
+    """
+    df = df.copy()
+    if len(df.columns) >= 2:
+        geoid_col, value_col = df.columns[0], df.columns[1]
+        return df[[geoid_col, value_col]].rename(
+            columns={geoid_col: 'GEOID', value_col: canonical_name}
+        )
+    elif len(df.columns) == 1:
+        value_col = df.columns[0]
+        result = df[[value_col]].copy()
+        result.index.name = 'GEOID'
+        result = result.reset_index()
+        return result.rename(columns={value_col: canonical_name})
+    else:
+        raise ValueError("DataFrame must have at least one column")
+
+
 def validate_geoid_alignment(
     df: pd.DataFrame,
     tracts_gdf: gpd.GeoDataFrame,
@@ -183,84 +208,44 @@ class AnalysisInputs:
         if self.tract_geometries is None:
             raise ValueError("Tract geometries must be loaded first")
 
-        demographics_df = demographics_df.copy()
+        demographics_df = _normalize_to_single_col(demographics_df, 'population')
         demographics_df = validate_geoid_alignment(
             demographics_df, self.tract_geometries, "demographic data"
         )
 
-        if 'Population' in demographics_df.columns and 'population' not in demographics_df.columns:
-            demographics_df['population'] = demographics_df['Population']
-
-        if 'population' not in demographics_df.columns:
-            raise ValueError("Demographics data must contain 'population' column")
-
-        core_columns = ['population']
-        covariate_columns = [c for c in demographics_df.columns if c not in core_columns]
-
-        self.demographics_core = demographics_df[core_columns].copy()
-        self.demographics_covariates = (
-            demographics_df[covariate_columns].copy() if covariate_columns else None
-        )
+        self.demographics_core = demographics_df[['population']].copy()
+        self.demographics_covariates = None
         self._demographics = demographics_df
 
-        self.logger.info(
-            f"Loaded demographic data: {len(core_columns)} core column(s), "
-            f"{len(covariate_columns)} covariate column(s)"
-        )
+        self.logger.info("Loaded demographic data")
 
-    def load_baseline_exposure(
-        self,
-        exposure_df: pd.DataFrame,
-        pollutant_columns: Optional[List[str]] = None,
-    ) -> None:
+    def load_baseline_exposure(self, exposure_df: pd.DataFrame) -> None:
         self.logger.info("Loading baseline exposure data")
 
         if self.tract_geometries is None:
             raise ValueError("Tract geometries must be loaded first")
 
-        exposure_df = exposure_df.copy()
+        exposure_df = _normalize_to_single_col(exposure_df, 'ufp')
         exposure_df = validate_geoid_alignment(
             exposure_df, self.tract_geometries, "baseline exposure data"
         )
 
-        if pollutant_columns is None:
-            pollutant_columns = exposure_df.select_dtypes(include=[float, int]).columns.tolist()
+        self.baseline_exposure = exposure_df[['ufp']].copy()
+        self.logger.info("Loaded baseline exposure data")
 
-        missing_cols = [c for c in pollutant_columns if c not in exposure_df.columns]
-        if missing_cols:
-            raise ValueError(f"Missing pollutant columns: {missing_cols}")
-
-        self.baseline_exposure = exposure_df[pollutant_columns].copy()
-        self.logger.info(
-            f"Loaded baseline exposure data with {len(pollutant_columns)} pollutants: {pollutant_columns}"
-        )
-
-    def load_incidence_data(
-        self,
-        incidence_df: pd.DataFrame,
-        endpoint_columns: Optional[List[str]] = None,
-    ) -> None:
+    def load_incidence_data(self, incidence_df: pd.DataFrame) -> None:
         self.logger.info("Loading incidence data")
 
         if self.tract_geometries is None:
             raise ValueError("Tract geometries must be loaded first")
 
-        incidence_df = incidence_df.copy()
+        incidence_df = _normalize_to_single_col(incidence_df, 'mortality_rate')
         incidence_df = validate_geoid_alignment(
             incidence_df, self.tract_geometries, "incidence data"
         )
 
-        if endpoint_columns is None:
-            endpoint_columns = incidence_df.select_dtypes(include=[float, int]).columns.tolist()
-
-        missing_cols = [c for c in endpoint_columns if c not in incidence_df.columns]
-        if missing_cols:
-            raise ValueError(f"Missing endpoint columns: {missing_cols}")
-
-        self.incidence = incidence_df[endpoint_columns].copy()
-        self.logger.info(
-            f"Loaded incidence data with {len(endpoint_columns)} endpoints: {endpoint_columns}"
-        )
+        self.incidence = incidence_df[['mortality_rate']].copy()
+        self.logger.info("Loaded incidence data")
 
     def load_preterm_birth_data(self, preterm_birth_df: pd.DataFrame) -> None:
         self.logger.info("Loading preterm birth data")
@@ -268,33 +253,16 @@ class AnalysisInputs:
         if self.tract_geometries is None:
             raise ValueError("Tract geometries must be loaded first")
 
-        preterm_birth_df = preterm_birth_df.copy()
-
-        if 'baseline_preterm_births' not in preterm_birth_df.columns:
-            if 'preterm_births' in preterm_birth_df.columns:
-                preterm_birth_df['baseline_preterm_births'] = preterm_birth_df['preterm_births']
-            else:
-                raise ValueError(
-                    "Missing required column 'baseline_preterm_births' or 'preterm_births'"
-                )
-
+        preterm_birth_df = _normalize_to_single_col(preterm_birth_df, 'baseline_preterm_births')
         preterm_birth_df = validate_geoid_alignment(
             preterm_birth_df, self.tract_geometries, "preterm birth data"
         )
 
-        core_columns = ['baseline_preterm_births']
-        covariate_columns = [c for c in preterm_birth_df.columns if c not in core_columns]
-
-        self.preterm_birth_core = preterm_birth_df[core_columns].copy()
-        self.preterm_birth_covariates = (
-            preterm_birth_df[covariate_columns].copy() if covariate_columns else None
-        )
+        self.preterm_birth_core = preterm_birth_df[['baseline_preterm_births']].copy()
+        self.preterm_birth_covariates = None
         self._preterm_birth = preterm_birth_df
 
-        self.logger.info(
-            f"Loaded preterm birth data: {len(core_columns)} core column(s), "
-            f"{len(covariate_columns)} covariate column(s)"
-        )
+        self.logger.info("Loaded preterm birth data")
 
     def set_preterm_birth_economic_parameters(
         self, odds_ratio: float, monetary_value_per_ptb: float
@@ -304,41 +272,21 @@ class AnalysisInputs:
         self.monetary_value_per_ptb = monetary_value_per_ptb
 
     def load_mortality_economic_tract_data(self, economic_df: pd.DataFrame) -> None:
-        """
-        Load tract-level inputs for mortality economic valuation.
-
-        Required column: ``per_capita_expenditure``. Optional: ``life_years_gained`` per tract;
-        if omitted, a default of 10.0 life years per tract is used when computing benefits.
-        """
+        """Load tract-level per-capita expenditure for mortality economic valuation."""
         self.logger.info("Loading tract-level per-capita expenditure data for mortality valuation")
 
         if self.tract_geometries is None:
             raise ValueError("Tract geometries must be loaded first")
 
-        economic_df = economic_df.copy()
-
-        if 'per_capita_expenditure' not in economic_df.columns:
-            raise ValueError("Economic tract data must contain 'per_capita_expenditure'")
-
+        economic_df = _normalize_to_single_col(economic_df, 'per_capita_expenditure')
         economic_df = validate_geoid_alignment(
             economic_df, self.tract_geometries, "per capita expenditure tract data"
         )
 
-        core_columns = ['per_capita_expenditure']
-        if 'life_years_gained' in economic_df.columns:
-            core_columns.append('life_years_gained')
-
-        covariate_columns = [c for c in economic_df.columns if c not in core_columns]
-
-        self.economic_core = economic_df[core_columns].copy()
-        self.economic_covariates = (
-            economic_df[covariate_columns].copy() if covariate_columns else None
-        )
+        self.economic_core = economic_df[['per_capita_expenditure']].copy()
+        self.economic_covariates = None
         self._economic = economic_df
-        self.logger.info(
-            f"Loaded per-capita expenditure data: {len(core_columns)} core column(s), "
-            f"{len(covariate_columns)} other column(s)"
-        )
+        self.logger.info("Loaded per-capita expenditure data")
 
     def compute_derived_inputs(self) -> None:
         """

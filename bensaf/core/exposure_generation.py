@@ -12,7 +12,7 @@ following the expert-defined pipeline:
 import json
 import logging
 from pathlib import Path
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -20,25 +20,78 @@ import geopandas as gpd
 from shapely.geometry import Point
 from scipy.spatial import cKDTree
 
-from bensaf.aermod_parser import AermodParser
+from aermod_parser import AermodFile
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_aermod_sections(
+    file_path: Union[str, Path],
+    section_types: List[str],
+) -> Tuple[Dict[str, pd.DataFrame], Dict[str, Dict[str, Any]]]:
+    """
+    Parse an AERMOD file with the ``aermod_parser`` package and shape the result
+    tables to match the legacy ``AermodParser`` output: each table gets x_coord/
+    y_coord columns (converted from polar direction/distance using each
+    receptor's network origin, or renamed directly from Cartesian x/y).
+
+    Returns:
+        (results, network_info) where results maps section_type -> DataFrame,
+        and network_info maps network_id -> {'network_type', 'origin_x', 'origin_y'}.
+    """
+    f = AermodFile.from_path(file_path)
+    networks = f.metadata.networks
+    network_info = {
+        nid: {
+            'network_type': net.network_type,
+            'origin_x': net.origin_x,
+            'origin_y': net.origin_y,
+        }
+        for nid, net in networks.items()
+    }
+    origins = {nid: (net.origin_x or 0.0, net.origin_y or 0.0) for nid, net in networks.items()}
+
+    results: Dict[str, pd.DataFrame] = {}
+    for section_type in section_types:
+        if section_type == 'ANNUAL_AVERAGE':
+            df = f.annual_average
+        elif section_type.endswith('_HIGHEST'):
+            df = f.n_highest(rank=int(section_type[0]))
+        elif section_type == 'CONCURRENT_AVERAGE':
+            df = f.concurrent
+        else:
+            continue
+
+        if df.empty:
+            results[section_type] = df
+            continue
+
+        df = df.copy()
+        if 'direction' in df.columns and 'distance' in df.columns:
+            origin_x = df['network_id'].map(lambda nid: origins.get(nid, (0.0, 0.0))[0])
+            origin_y = df['network_id'].map(lambda nid: origins.get(nid, (0.0, 0.0))[1])
+            df['x_coord'] = origin_x + df['distance'] * np.sin(np.radians(df['direction']))
+            df['y_coord'] = origin_y + df['distance'] * np.cos(np.radians(df['direction']))
+        elif 'x' in df.columns and 'y' in df.columns:
+            df = df.rename(columns={'x': 'x_coord', 'y': 'y_coord'})
+        results[section_type] = df
+
+    return results, network_info
 
 
 def extract_annual_average(ado_file_path: Union[str, Path], aermod_crs: str = 'EPSG:32616') -> Optional[gpd.GeoDataFrame]:
     """
     Extract annual average concentration data from an AERMOD .ADO file.
-    
+
     Args:
         ado_file_path: Path to AERMOD .ADO file
         aermod_crs: Coordinate reference system for AERMOD data
-        
+
     Returns:
         GeoDataFrame with annual average concentrations, or None if no data found
     """
-    parser = AermodParser(str(ado_file_path))
-    results = parser.parse(section_types=['ANNUAL_AVERAGE'])
-    
+    results, _ = _extract_aermod_sections(ado_file_path, ['ANNUAL_AVERAGE'])
+
     annual_avg = results.get('ANNUAL_AVERAGE', pd.DataFrame())
     if len(annual_avg) == 0:
         return None
@@ -705,8 +758,6 @@ def load_exposure_from_aermod(
     Returns:
         DataFrame with GEOID as index and pollutant column
     """
-    from bensaf.aermod_parser import AermodParser
-    
     # Normalize to list of paths
     if isinstance(aermod_file_path, (str, Path)):
         file_paths = [aermod_file_path]
@@ -733,12 +784,9 @@ def load_exposure_from_aermod(
     for file_idx, file_path in enumerate(file_paths):
         logger.info(f"Processing file {file_idx + 1}/{len(file_paths)}: {file_path}")
         
-        # Parse AERMOD file using comprehensive parser
-        parser = AermodParser(str(file_path))
-        
-        # Parse and extract concentration data
-        results = parser.parse(section_types=section_types)
-        
+        # Parse AERMOD file using the aermod_parser package
+        results, network_info_by_id = _extract_aermod_sections(str(file_path), section_types)
+
         # Extract DataFrame from results dictionary
         aermod_df = pd.DataFrame()
         for section_type in section_types:
@@ -773,8 +821,8 @@ def load_exposure_from_aermod(
             network_ids = aermod_df['network_id'].dropna().unique()
             
             for network_id in network_ids:
-                if network_id in parser.network_info:
-                    network_info = parser.network_info[network_id]
+                if network_id in network_info_by_id:
+                    network_info = network_info_by_id[network_id]
                     if network_info.get('network_type') == 'GRIDPOLR':
                         # Get network mask
                         network_mask = aermod_df['network_id'] == network_id
