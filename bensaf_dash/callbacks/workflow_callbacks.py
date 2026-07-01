@@ -126,19 +126,6 @@ def get_case_study_by_id(case_study_id):
             return case_study
     raise ValueError(f"Case study '{case_study_id}' not found")
 
-def _normalize_per_capita_expenditure_df(df):
-    """Ensure canonical column ``per_capita_expenditure`` (legacy CSV names remapped)."""
-    if df is None:
-        return None
-    df = df.copy()
-    if "per_capita_expenditure" in df.columns:
-        return df
-    if "per_capita_consumption" in df.columns:
-        return df.rename(columns={"per_capita_consumption": "per_capita_expenditure"})
-    if "income" in df.columns:
-        return df.rename(columns={"income": "per_capita_expenditure"})
-    return df
-
 
 def resolve_case_study_paths(case_study):
     """Resolve all file paths for a case study relative to project root."""
@@ -395,8 +382,7 @@ def register_callbacks(app):
             mortality_df = pd.read_csv(resolved_paths['mortality'])
             per_capita_expenditure_df = None
             if resolved_paths.get('per_capita_expenditure'):
-                pce_path = resolved_paths['per_capita_expenditure']
-                per_capita_expenditure_df = _normalize_per_capita_expenditure_df(pd.read_csv(pce_path))
+                per_capita_expenditure_df = pd.read_csv(resolved_paths['per_capita_expenditure'])
 
             global workflow_instance, cached_geojson, cached_center
             cached_geojson = None
@@ -424,14 +410,9 @@ def register_callbacks(app):
                     exposure_data['aggregation_kwargs'] = agg_kw
                 exposure_source_str = 'aermod_workflow'
             else:
-                exposure_df = pd.read_csv(resolved_paths['exposure_csv'])
-                if 'pollutant_concentration' in exposure_df.columns:
-                    exposure_df = exposure_df.rename(columns={'pollutant_concentration': 'ufp'})
-                elif 'baseline_pollutant_concentration' in exposure_df.columns:
-                    exposure_df = exposure_df.rename(columns={'baseline_pollutant_concentration': 'ufp'})
-                exposure_data = exposure_df
+                exposure_data = pd.read_csv(resolved_paths['exposure_csv'])
                 exposure_source_str = 'csv'
-            
+
             workflow_instance.load_inputs(
                 tracts_gdf=tracts_gdf,
                 demographics_df=demographics_df,
@@ -439,7 +420,6 @@ def register_callbacks(app):
                 exposure_data=exposure_data,
                 incidence_df=mortality_df,
                 per_capita_expenditure_df=per_capita_expenditure_df,
-                pollutant_name='ufp'
             )
             
             n_exposure = len(workflow_instance.inputs.baseline_exposure)
@@ -629,21 +609,15 @@ def register_callbacks(app):
             decoded = base64.b64decode(content_string)
             
             exposure_df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
-            
+
             global workflow_instance
             if workflow_instance is None:
                 workflow_instance = Workflow()
-            
-            # Rename column if needed
-            if 'pollutant_concentration' in exposure_df.columns:
-                exposure_df = exposure_df.rename(columns={'pollutant_concentration': 'ufp'})
-            elif 'baseline_pollutant_concentration' in exposure_df.columns:
-                exposure_df = exposure_df.rename(columns={'baseline_pollutant_concentration': 'ufp'})
-            
+
             if workflow_instance.inputs.tract_geometries is None:
                 raise ValueError("Tract geometries must be loaded first")
-            
-            workflow_instance.inputs.load_baseline_exposure(exposure_df, pollutant_columns=['ufp'])
+
+            workflow_instance.inputs.load_baseline_exposure(exposure_df)
             
             state['exposure_loaded'] = True
             state['n_exposure'] = len(exposure_df)
@@ -690,7 +664,7 @@ def register_callbacks(app):
             if workflow_instance.inputs.tract_geometries is None:
                 raise ValueError("Tract geometries must be loaded first")
             
-            workflow_instance.inputs.load_incidence_data(incidence_df, endpoint_columns=['mortality_rate'])
+            workflow_instance.inputs.load_incidence_data(incidence_df)
             
             state['mortality_loaded'] = True
             state['n_mortality'] = len(incidence_df)
@@ -726,9 +700,7 @@ def register_callbacks(app):
         try:
             content_type, content_string = contents.split(',')
             decoded = base64.b64decode(content_string)
-            economic_df = _normalize_per_capita_expenditure_df(
-                pd.read_csv(io.StringIO(decoded.decode('utf-8')))
-            )
+            economic_df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
 
             global workflow_instance
             if workflow_instance is None:
@@ -960,7 +932,7 @@ def register_callbacks(app):
 
             workflow_instance.config.saf_scenarios = scenarios
             
-            analysis_results = workflow_instance.run_scenarios(scenarios=scenarios, pollutant_name='ufp')
+            analysis_results = workflow_instance.run_scenarios(scenarios=scenarios)
 
             pop_series = None
             dc = workflow_instance.inputs.demographics_core
@@ -1372,9 +1344,8 @@ def register_callbacks(app):
             for col in available_cols
         ]
         
-        # Set default value to first available column (prefer population or baseline_pollutant_concentration)
         default_value = None
-        for preferred in ['population', 'baseline_pollutant_concentration', 'mortality_rate']:
+        for preferred in ['population', 'ufp', 'mortality_rate']:
             if preferred in available_cols:
                 default_value = preferred
                 break
@@ -1432,7 +1403,7 @@ def register_callbacks(app):
         colorbar_title = selected_variable.replace('_', ' ').title()
         
         # Add units for specific variables
-        if 'baseline_pollutant_concentration' in selected_variable or 'concentration' in selected_variable.lower():
+        if selected_variable == 'ufp' or 'concentration' in selected_variable.lower():
             colorbar_title += ' (pt/cm³)'
         elif 'mortality_rate' in selected_variable or 'rate' in selected_variable.lower():
             colorbar_title += ' (rate)'
@@ -1492,7 +1463,7 @@ def register_callbacks(app):
             customdata=customdata,
             hovertemplate=hovertemplate,
         )
-        if selected_variable in ('baseline_pollutant_concentration', 'ufp'):
+        if selected_variable == 'ufp':
             choropleth_kw['zmin'] = 0
             choropleth_kw['zmax'] = 1500
 
@@ -1866,7 +1837,7 @@ def register_callbacks(app):
             if 'ufp' in exposure_df.columns:
                 exposure_df = exposure_df.rename(columns={'ufp': 'ufp'})
             
-            workflow_instance.inputs.load_baseline_exposure(exposure_df, pollutant_columns=['ufp'])
+            workflow_instance.inputs.load_baseline_exposure(exposure_df)
             
             state['exposure_loaded'] = True
             state['n_exposure'] = len(workflow_instance.inputs.baseline_exposure)

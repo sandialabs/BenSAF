@@ -28,9 +28,7 @@ logger = logging.getLogger(__name__)
 # Exposure loading strategies
 # ---------------------------------------------------------------------------
 
-def _load_exposure_csv(
-    exposure_data: pd.DataFrame,
-) -> pd.DataFrame:
+def _load_exposure_csv(exposure_data: pd.DataFrame) -> pd.DataFrame:
     if not isinstance(exposure_data, pd.DataFrame):
         raise ValueError("exposure_data must be a DataFrame for 'csv' source")
     return exposure_data
@@ -39,7 +37,6 @@ def _load_exposure_csv(
 def _load_exposure_aermod(
     exposure_data: Dict[str, Any],
     tracts_gdf: gpd.GeoDataFrame,
-    pollutant_name: str,
 ) -> pd.DataFrame:
     if not isinstance(exposure_data, dict):
         raise ValueError("exposure_data must be a dict for 'aermod' source")
@@ -53,14 +50,12 @@ def _load_exposure_aermod(
         center_location=exposure_data.get('center_location'),
         center_crs=exposure_data.get('center_crs'),
         aermod_crs=exposure_data.get('aermod_crs', 'EPSG:32616'),
-        pollutant_name=pollutant_name,
     )
 
 
 def _load_exposure_aermod_workflow(
     exposure_data: Dict[str, Any],
     tracts_gdf: gpd.GeoDataFrame,
-    pollutant_name: str,
 ) -> pd.DataFrame:
     if not isinstance(exposure_data, dict):
         raise ValueError("exposure_data must be a dict for 'aermod_workflow' source")
@@ -78,7 +73,7 @@ def _load_exposure_aermod_workflow(
             "exposure_data must contain 'calibration_file' for 'aermod_workflow' source"
         )
 
-    exposure_df = generate_exposure_from_aermod(
+    return generate_exposure_from_aermod(
         landing_files=landing_files,
         takeoff_files=takeoff_files,
         tracts_gdf=tracts_gdf,
@@ -87,9 +82,6 @@ def _load_exposure_aermod_workflow(
         aggregation_method=exposure_data.get('aggregation_method', 'spatial_join'),
         **exposure_data.get('aggregation_kwargs', {}),
     )
-    if pollutant_name != 'ufp' and 'ufp' in exposure_df.columns:
-        exposure_df = exposure_df.rename(columns={'ufp': pollutant_name})
-    return exposure_df
 
 
 _EXPOSURE_LOADERS = {
@@ -134,21 +126,22 @@ class Workflow:
         incidence_df: pd.DataFrame,
         preterm_birth_df: Optional[pd.DataFrame] = None,
         per_capita_expenditure_df: Optional[pd.DataFrame] = None,
-        pollutant_name: str = 'ufp',
     ) -> None:
         """
         Load all input data for the analysis.
 
+        All CSV inputs follow the two-column convention: first column is the GEOID
+        index, second column is the value.  Column names are ignored.
+
         Args:
             tracts_gdf: GeoDataFrame with census tract geometries
-            demographics_df: DataFrame with demographic data
+            demographics_df: DataFrame (GEOID, population)
             exposure_source: One of 'csv', 'aermod', 'aermod_workflow'
-            exposure_data: Exposure data; format depends on exposure_source
-            incidence_df: DataFrame with incidence rates by endpoint
-            preterm_birth_df: Optional DataFrame with preterm birth data
-            per_capita_expenditure_df: Optional tract table with at least GEOID and
-                per_capita_expenditure (and optionally life_years_gained)
-            pollutant_name: Name of the pollutant column (default: 'ufp')
+            exposure_data: Exposure DataFrame (GEOID, concentration) for 'csv', or
+                a config dict for 'aermod'/'aermod_workflow' sources
+            incidence_df: DataFrame (GEOID, mortality_rate)
+            preterm_birth_df: Optional DataFrame (GEOID, baseline_preterm_births)
+            per_capita_expenditure_df: Optional DataFrame (GEOID, per_capita_expenditure)
         """
         self.logger.info("Loading input data")
 
@@ -166,9 +159,9 @@ class Workflow:
             exposure_df = loader(exposure_data)
         else:
             tracts_reset = self.inputs.tract_geometries.reset_index()
-            exposure_df = loader(exposure_data, tracts_reset, pollutant_name)
+            exposure_df = loader(exposure_data, tracts_reset)
 
-        self.inputs.load_baseline_exposure(exposure_df, pollutant_columns=[pollutant_name])
+        self.inputs.load_baseline_exposure(exposure_df)
         self.inputs.load_incidence_data(incidence_df)
 
         if preterm_birth_df is not None:
@@ -249,7 +242,6 @@ def run_analysis(
     incidence_df: pd.DataFrame,
     config: Optional[Union[AnalysisConfig, Dict[str, Any]]] = None,
     scenarios: Optional[List[float]] = None,
-    pollutant_name: str = 'ufp',
     preterm_birth_df: Optional[pd.DataFrame] = None,
     per_capita_expenditure_df: Optional[pd.DataFrame] = None,
 ) -> AnalysisResults:
@@ -265,6 +257,5 @@ def run_analysis(
         incidence_df=incidence_df,
         preterm_birth_df=preterm_birth_df,
         per_capita_expenditure_df=per_capita_expenditure_df,
-        pollutant_name=pollutant_name,
     )
-    return workflow.run_scenarios(scenarios=scenarios, pollutant_name=pollutant_name)
+    return workflow.run_scenarios(scenarios=scenarios)
