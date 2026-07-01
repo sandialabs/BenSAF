@@ -3,57 +3,76 @@ import geopandas as gpd
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from bensaf.model.workflow import run_analysis
+from aermod_parser import AermodFile
+from bensaf.model.workflow import Workflow
 
 project_root = Path(__file__).parent.parent
 data_dir = project_root / "data" / "case-studies" / "ord"
 calibration_file = project_root / "data" / "aermod_calibration_coefficients.json"
 
-print("Loading data files...")
-tracts_gdf = gpd.read_file(data_dir / "tracts_geometries.geojson")
+# East flow: 1/3 weight, West flow: 2/3 weight
+landing_files = [
+    (data_dir / "landing_eastflow.ADO", 1 / 3),
+    (data_dir / "landing_westflow.ADO", 2 / 3),
+]
 
+## Inspect AERMOD files
+
+print("Inspecting AERMOD files with aermod_parser...")
+for path, weight in landing_files:
+    f = AermodFile.from_path(path)
+    print(f"\n  {path.name}  (weight={weight:.3f})")
+    print(f"    Pollutant : {f.metadata.pollutant}")
+    print(f"    Periods   : {', '.join(f.metadata.averaging_periods)}")
+    print(f"    Sections  : {', '.join(f.section_types)}")
+    for nid, net in f.metadata.networks.items():
+        print(f"    Network   : {nid}  type={net.network_type}  "
+              f"origin=({net.origin_x}, {net.origin_y})")
+    aa = f.annual_average
+    if not aa.empty:
+        lo, hi = aa['concentration'].min(), aa['concentration'].max()
+        print(f"    Annual avg: {len(aa)} receptors, conc range [{lo:.4g}, {hi:.4g}]")
+
+## Load spatial and tabular data
+
+print("\nLoading data files...")
+tracts_gdf = gpd.read_file(data_dir / "tracts_geometries.geojson")
 # Each CSV: col 1 = GEOID index, col 2 = value.  Column names are ignored.
 demographics_df = pd.read_csv(data_dir / "demographics_df.csv")
 mortality_df = pd.read_csv(data_dir / "mortality_df.csv")
+print(f"  {len(tracts_gdf)} census tracts")
 
-# East flow: 1/3 weight, West flow: 2/3 weight
-east_weight = 1 / 3
-west_weight = 2 / 3
+## Build Workflow and load inputs
 
-landing_files = [
-    (data_dir / "landing_eastflow.ADO", east_weight),
-    (data_dir / "landing_westflow.ADO", west_weight),
-]
-takeoff_files = None  # include takeoff if available
+workflow = Workflow()
 
-print(f"Loaded {len(tracts_gdf)} tracts")
-
-exposure_data = {
-    'landing_files': landing_files,
-    'takeoff_files': takeoff_files,
-    'calibration_file': calibration_file,
-    'aermod_crs': 'EPSG:32616',  # UTM Zone 16N
-}
-
-print("\nGenerating exposure from AERMOD files and running analysis...")
-results = run_analysis(
+workflow.load_inputs(
     tracts_gdf=tracts_gdf,
     demographics_df=demographics_df,
     exposure_source='aermod_workflow',
-    exposure_data=exposure_data,
+    exposure_data={
+        'landing_files': landing_files,
+        'takeoff_files': None,
+        'calibration_file': calibration_file,
+        'aermod_crs': 'EPSG:32616',  # UTM Zone 16N
+    },
     incidence_df=mortality_df,
-    scenarios=[25, 50],
 )
 
-print("Analysis complete!")
+print(f"\nExposure loaded: {len(workflow.inputs.baseline_exposure)} tracts with UFP values")
 
-# Summary output
+## Run scenarios
+
+results = workflow.run_scenarios(scenarios=[25, 50])
+
+## Print summary
+
 print("\n" + "=" * 60)
 print("Summary Statistics")
 print("=" * 60)
 
 pop_series = None
-dc = results.inputs.demographics_core
+dc = workflow.inputs.demographics_core
 if dc is not None and 'population' in dc.columns:
     pop_series = dc['population']
 
@@ -62,13 +81,14 @@ for scenario_id, scenario_result in sorted(results.scenarios.items()):
     agg = scenario_result.get_aggregated_results(population=pop_series)
     if 'mortality' in agg:
         tac = agg['mortality']['total_attributable_cases']
-        print(f"  Cases avoided (mean):  {tac.mean:.1f}")
+        print(f"  Cases avoided (mean):   {tac.mean:.1f}")
         print(f"  Cases avoided (95% CI): {tac.lower:.1f} – {tac.upper:.1f}")
     if 'economic_benefits' in agg and 'mortality_economic_value' in agg['economic_benefits']:
         ev = agg['economic_benefits']['mortality_economic_value']
         print(f"  Economic value: ${ev.mean / 1e6:.2f} million")
 
-# Basic choropleth plots
+## Choropleth plots
+
 merged = results.get_merged_data()
 
 n_scenarios = len(results.scenarios)
@@ -76,7 +96,6 @@ fig, axes = plt.subplots(1, n_scenarios + 1, figsize=(6 * (n_scenarios + 1), 5))
 if n_scenarios + 1 == 1:
     axes = [axes]
 
-# Baseline exposure
 ax0 = axes[0]
 if 'ufp' in merged.columns:
     merged.plot(column='ufp', ax=ax0, legend=True, cmap='YlOrRd')
@@ -95,7 +114,7 @@ for i, (scenario_id, scenario_result) in enumerate(sorted(results.scenarios.item
         ax.set_title(f'Cases Avoided\n({scenario_result.spec.scenario_label})')
     else:
         ax.text(0.5, 0.5, 'Results not available', ha='center', va='center',
-                transform=ax.transAxes)
+                transform=ax0.transAxes)
         ax.set_title(f'{scenario_result.spec.scenario_label}')
     ax.axis('off')
 
