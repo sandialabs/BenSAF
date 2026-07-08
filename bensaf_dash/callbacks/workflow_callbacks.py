@@ -105,7 +105,7 @@ def load_saf_blend_parameters():
 def load_case_studies():
     """Load and validate case studies from JSON metadata file."""
     project_root = Path(__file__).parent.parent.parent
-    case_studies_file = project_root / 'data' / 'case-studies' / 'case_studies.json'
+    case_studies_file = project_root / 'data' / 'case_studies.json'
     
     if not case_studies_file.exists():
         raise FileNotFoundError(f"Case studies metadata not found at {case_studies_file}")
@@ -130,7 +130,7 @@ def get_case_study_by_id(case_study_id):
 def resolve_case_study_paths(case_study):
     """Resolve all file paths for a case study relative to project root."""
     project_root = Path(__file__).parent.parent.parent
-    case_studies_root = project_root / 'data' / 'case-studies'
+    case_studies_root = project_root / 'data'
     case_study_dir = case_studies_root / case_study['folder']
     
     files = case_study['files']

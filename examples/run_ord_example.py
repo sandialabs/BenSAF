@@ -1,14 +1,13 @@
-from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import matplotlib.pyplot as plt
 
 from aermod_parser import AermodFile
+import bensaf
 from bensaf.model.workflow import Workflow
 
-project_root = Path(__file__).parent.parent
-data_dir = project_root / "data" / "case-studies" / "ord"
-calibration_file = project_root / "data" / "aermod_calibration_coefficients.json"
+data_dir = bensaf.DATA_DIR / "ord"
+calibration_file = bensaf.CALIBRATION_FILE
 
 # East flow: 1/3 weight, West flow: 2/3 weight
 landing_files = [
