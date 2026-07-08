@@ -20,6 +20,7 @@ from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import dash
 
+import bensaf
 from bensaf.model.data_model import AnalysisResults
 from bensaf.model.workflow import Workflow
 
@@ -91,26 +92,20 @@ def _numeric_saf_scenarios(scenarios, default=None):
 
 def load_saf_blend_parameters():
     """Load SAF blend parameters from JSON file."""
-    project_root = Path(__file__).parent.parent.parent
-    saf_params_file = project_root / 'data' / 'saf_blend_parameters.json'
-    
-    if not saf_params_file.exists():
+    if not bensaf.SAF_BLEND_PARAMETERS_FILE.exists():
         return [0.0, 1.0, 0.0]
-    
-    with open(saf_params_file, 'r') as f:
+
+    with open(bensaf.SAF_BLEND_PARAMETERS_FILE, 'r') as f:
         data = json.load(f)
     
     return data.get('polynomial_coefficients', [0.0, 1.0, 0.0])
 
 def load_case_studies():
     """Load and validate case studies from JSON metadata file."""
-    project_root = Path(__file__).parent.parent.parent
-    case_studies_file = project_root / 'data' / 'case_studies.json'
-    
-    if not case_studies_file.exists():
-        raise FileNotFoundError(f"Case studies metadata not found at {case_studies_file}")
-    
-    with open(case_studies_file, 'r') as f:
+    if not bensaf.CASE_STUDIES_FILE.exists():
+        raise FileNotFoundError(f"Case studies metadata not found at {bensaf.CASE_STUDIES_FILE}")
+
+    with open(bensaf.CASE_STUDIES_FILE, 'r') as f:
         data = json.load(f)
     
     if 'case_studies' not in data:
@@ -129,9 +124,7 @@ def get_case_study_by_id(case_study_id):
 
 def resolve_case_study_paths(case_study):
     """Resolve all file paths for a case study relative to project root."""
-    project_root = Path(__file__).parent.parent.parent
-    case_studies_root = project_root / 'data'
-    case_study_dir = case_studies_root / case_study['folder']
+    case_study_dir = bensaf.DATA_DIR / case_study['folder']
     
     files = case_study['files']
     resolved = {}
@@ -168,7 +161,7 @@ def resolve_case_study_paths(case_study):
         resolved['calibration'] = case_study_dir / case_study['calibration_file']
     else:
         # Use shared calibration file
-        resolved['calibration'] = project_root / 'data' / 'aermod_calibration_coefficients.json'
+        resolved['calibration'] = bensaf.CALIBRATION_FILE
     
     return resolved
 
@@ -1798,8 +1791,7 @@ def register_callbacks(app):
             if len(landing_files) == 0 and len(takeoff_files) == 0:
                 raise ValueError("Upload at least one landing or takeoff AERMOD file")
 
-            project_root = Path(__file__).parent.parent.parent
-            calibration_file = project_root / 'data' / 'aermod_calibration_coefficients.json'
+            calibration_file = bensaf.CALIBRATION_FILE
 
             if not calibration_file.exists():
                 raise FileNotFoundError(f"Default calibration file not found at {calibration_file}")
