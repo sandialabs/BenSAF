@@ -109,7 +109,7 @@ for i, (scenario_id, scenario_result) in enumerate(sorted(results.scenarios.item
     ax = axes[i + 1]
     col = f"{scenario_result.spec.scenario_label}_mortality_attributable_cases_mean"
     if col in merged.columns:
-        merged.plot(column=col, ax=ax, legend=True, cmap='RdYlGn_r')
+        merged.plot(column=col, ax=ax, legend=True, cmap='Blues')
         ax.set_title(f'Cases Avoided\n({scenario_result.spec.scenario_label})')
     else:
         ax.text(0.5, 0.5, 'Results not available', ha='center', va='center',
