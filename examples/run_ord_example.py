@@ -118,7 +118,7 @@ for i, (scenario_id, scenario_result) in enumerate(sorted(results.scenarios.item
     ax.axis('off')
 
 plt.tight_layout()
-output_path = project_root / 'examples' / 'ord_analysis_results.png'
+output_path = bensaf.DATA_DIR.parent / 'examples' / 'ord_analysis_results.png'
 plt.savefig(output_path, dpi=150, bbox_inches='tight')
 print(f"\nPlot saved to: {output_path}")
 plt.show()
