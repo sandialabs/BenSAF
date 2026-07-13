@@ -11,8 +11,8 @@ calibration_file = bensaf.CALIBRATION_FILE
 
 # East flow: 1/3 weight, West flow: 2/3 weight
 landing_files = [
-    (data_dir / "landing_eastflow.ADO", 1 / 3),
-    (data_dir / "landing_westflow.ADO", 2 / 3),
+    (data_dir / "AERMOD" / "landing_eastflow.ADO", 1 / 3),
+    (data_dir / "AERMOD" / "landing_westflow.ADO", 2 / 3),
 ]
 
 ## Inspect AERMOD files
