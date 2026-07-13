@@ -1,19 +1,18 @@
-from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import matplotlib.pyplot as plt
 
 from aermod_parser import AermodFile
+import bensaf
 from bensaf.model.workflow import Workflow
 
-project_root = Path(__file__).parent.parent
-data_dir = project_root / "data" / "case-studies" / "ord"
-calibration_file = project_root / "data" / "aermod_calibration_coefficients.json"
+data_dir = bensaf.DATA_DIR / "ord"
+calibration_file = bensaf.CALIBRATION_FILE
 
 # East flow: 1/3 weight, West flow: 2/3 weight
 landing_files = [
-    (data_dir / "landing_eastflow.ADO", 1 / 3),
-    (data_dir / "landing_westflow.ADO", 2 / 3),
+    (data_dir / "AERMOD" / "landing_eastflow.ADO", 1 / 3),
+    (data_dir / "AERMOD" / "landing_westflow.ADO", 2 / 3),
 ]
 
 ## Inspect AERMOD files
@@ -110,7 +109,7 @@ for i, (scenario_id, scenario_result) in enumerate(sorted(results.scenarios.item
     ax = axes[i + 1]
     col = f"{scenario_result.spec.scenario_label}_mortality_attributable_cases_mean"
     if col in merged.columns:
-        merged.plot(column=col, ax=ax, legend=True, cmap='RdYlGn_r')
+        merged.plot(column=col, ax=ax, legend=True, cmap='Blues')
         ax.set_title(f'Cases Avoided\n({scenario_result.spec.scenario_label})')
     else:
         ax.text(0.5, 0.5, 'Results not available', ha='center', va='center',
@@ -119,7 +118,7 @@ for i, (scenario_id, scenario_result) in enumerate(sorted(results.scenarios.item
     ax.axis('off')
 
 plt.tight_layout()
-output_path = project_root / 'examples' / 'ord_analysis_results.png'
+output_path = bensaf.DATA_DIR.parent / 'examples' / 'ord_analysis_results.png'
 plt.savefig(output_path, dpi=150, bbox_inches='tight')
 print(f"\nPlot saved to: {output_path}")
 plt.show()
